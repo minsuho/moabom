@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "컨트롤 바 웹뷰에만 앱 API를 허용한다. 방송 사이트 웹뷰는 API에 접근할 수 없다.",
+  "webviews": ["ui"],
+  "permissions": ["core:default"]
+}

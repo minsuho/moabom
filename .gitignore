@@ -1,0 +1,11 @@
+# Rust / Tauri 빌드 산출물
+/src-tauri/target/
+/src-tauri/gen/schemas/
+
+# 에디터·OS
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+desktop.ini
+.DS_Store

@@ -1,0 +1,464 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<title>모아봄</title>
+<style>
+  :root {
+    --bg: #0a0a0c; --panel: #16161b; --panel2: #1d1d24; --line: #2a2a33; --text: #e8e8ee; --dim: #8b8b99;
+    --accent: #6366f1; --live: #ef4444;
+    color-scheme: dark;
+    --soop: #0545b1; --chzzk: #00d564; --cime: #ff5c8a; --youtube: #ff0033; --twitch: #9146ff; --kick: #53fc18;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); overflow: hidden;
+    font: 13px/1.3 "Pretendard", "Malgun Gothic", system-ui, sans-serif; }
+  body { display: flex; flex-direction: column; }
+  .bar { flex: none; }
+  button { font: inherit; color: inherit; }
+
+  .bar { display: flex; align-items: center; gap: 8px; height: 52px; padding: 0 10px; border-bottom: 1px solid var(--line); user-select: none; }
+  .logo { font-weight: 700; letter-spacing: -.02em; white-space: nowrap; margin-right: 2px; }
+  form { flex: 1; display: flex; gap: 6px; min-width: 200px; max-width: 560px; }
+  #q { flex: 1; min-width: 0; height: 34px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--text); outline: none; font: inherit; }
+  #q:focus { border-color: var(--accent); }
+  .btn { height: 34px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); cursor: pointer; white-space: nowrap; }
+  .btn:hover { border-color: #444452; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .seg { display: flex; }
+  .seg .btn { border-radius: 0; }
+  .seg .btn:first-child { border-radius: 8px 0 0 8px; }
+  .seg .btn:last-child { border-radius: 0 8px 8px 0; margin-left: -1px; }
+  .seg .btn.on { background: #24243a; border-color: var(--accent); position: relative; }
+  .spacer { flex: 1; }
+  .count { color: var(--dim); white-space: nowrap; }
+  .icon-btn { width: 34px; padding: 0; }
+  .chatctl { display: flex; gap: 6px; align-items: center; }
+  .chatctl.hidden, .chatctl .hidden { display: none; }
+  .sel { height: 34px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; outline: none; }
+  #chatSel { height: 34px; max-width: 240px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--accent);
+    background: var(--panel); color: var(--text); font: inherit; outline: none; }
+
+  /* 검색 결과 패널: 검색창 바로 아래에 방송 위로 겹쳐 뜬다 (위치·폭은 syncPanel이 검색창에 맞춘다) */
+  .panel { display: none; position: fixed; top: 52px; z-index: 20; max-height: 420px; overflow-y: auto; padding: 6px;
+    border: 1px solid var(--line); border-top: none; border-radius: 0 0 10px 10px; background: var(--panel); }
+  .panel.open { display: block; }
+  .panel .status { padding: 10px 8px; color: var(--dim); }
+  .hit { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer; }
+  .hit:hover, .hit.active { background: var(--panel2); }
+  .hit img, .hit .noimg { width: 36px; height: 36px; border-radius: 50%; object-fit: cover; flex: none; background: #2a2a33; }
+  .hit .info { flex: 1; min-width: 0; }
+  .hit .top { display: flex; align-items: center; gap: 6px; }
+  .hit .name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hit .title { color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pf { flex: none; font-size: 11px; padding: 1px 6px; border-radius: 4px; color: #fff; }
+  .live { flex: none; font-size: 10px; font-weight: 700; padding: 1px 5px; border-radius: 4px; background: var(--live); color: #fff; }
+  .hit.offline { opacity: .55; }
+  .hit .added { color: var(--accent); font-size: 12px; flex: none; }
+  .panel .hint { padding: 6px 8px 2px; color: var(--dim); font-size: 12px; }
+
+  /* 방송이 없을 때 보이는 안내 */
+  .empty { flex: 1; min-height: 0; overflow: auto; display: grid; place-items: center; padding: 24px; }
+  .empty.hidden { display: none; }
+  .welcome { max-width: 620px; width: 100%; }
+  .welcome h1 { margin: 0 0 6px; font-size: 22px; letter-spacing: -.02em; }
+  .welcome p { margin: 0 0 18px; color: var(--dim); line-height: 1.6; }
+  .welcome code { background: var(--panel2); padding: 1px 6px; border-radius: 4px; color: var(--text); }
+  .keys { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; }
+  .keys h2 { grid-column: 1 / -1; margin: 0 0 4px; font-size: 14px; }
+  kbd { display: inline-block; min-width: 20px; padding: 0 6px; border: 1px solid #3a3a46; border-bottom-width: 2px; border-radius: 5px;
+    background: #23232b; font: 600 12px/20px system-ui; text-align: center; }
+  .keys span { color: var(--dim); }
+
+  /* 설정 창: 톱니 버튼 아래에 방송 위로 겹쳐 뜬다 */
+  .settings { display: none; position: fixed; top: 52px; right: 10px; width: 340px; z-index: 20; padding: 8px;
+    border: 1px solid var(--line); border-top: none; border-radius: 0 0 10px 10px; background: var(--panel); }
+  .settings.open { display: block; }
+  .settings h3 { margin: 4px 8px 8px; font-size: 13px; color: var(--dim); font-weight: 600; }
+  .opt { display: flex; gap: 12px; align-items: flex-start; padding: 10px 8px; border-radius: 8px; cursor: pointer; }
+  .opt:hover { background: var(--panel2); }
+  .opt input { margin: 2px 0 0; width: 16px; height: 16px; accent-color: var(--accent); flex: none; }
+  .opt b { display: block; font-weight: 600; margin-bottom: 3px; }
+  .opt span { color: var(--dim); font-size: 12px; line-height: 1.5; }
+  .about { display: flex; align-items: center; justify-content: space-between; margin: 6px 8px 2px; padding-top: 10px;
+    border-top: 1px solid var(--line); color: var(--dim); font-size: 12px; }
+  .about .btn { height: 28px; font-size: 12px; }
+  .report { display: none; margin: 8px 8px 2px; padding: 10px; border-radius: 8px; background: var(--panel2); font-size: 12px; color: var(--dim); line-height: 1.6; }
+  .report.open { display: block; }
+  .report b { color: var(--text); font-size: 13px; user-select: text; }
+  .report .acts { display: flex; gap: 6px; margin-top: 8px; }
+  .report .btn { height: 28px; font-size: 12px; }
+  #gear.on { border-color: var(--accent); background: #24243a; }
+
+  .toast { position: fixed; right: 10px; top: 60px; max-width: 60%; padding: 8px 12px; border-radius: 8px; background: #3b1d1d;
+    border: 1px solid var(--live); opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 10; }
+  .toast.show { opacity: 1; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <div class="logo">모아봄</div>
+  <form id="add">
+    <input id="q" type="text" autocomplete="off" spellcheck="false"
+      placeholder="방송인 이름 검색, 방송 주소, 숲 아이디 또는 치지직 채널 ID">
+    <button class="btn primary" type="submit">추가</button>
+  </form>
+  <div class="seg" id="layout">
+    <button class="btn" data-layout="grid" title="격자 (F)">격자</button>
+    <button class="btn" data-layout="focus" title="선택한 방송 크게 (F)">포커스</button>
+  </div>
+  <select id="quality" class="sel" title="모든 방송 화질 (방송별로는 화면 위 버튼이나 Q로 바꾸기)">
+    <option value="best">최고화질</option>
+    <option value="auto">네트워크 최적화</option>
+    <option value="low">저화질</option>
+  </select>
+  <div class="spacer"></div>
+  <span class="count" id="count"></span>
+  <div class="chatctl" id="chatctl">
+    <button class="btn" id="chatOpen" title="선택한 방송 채팅 열기 (C)">💬 채팅</button>
+    <select id="chatSel" title="오른쪽에 띄울 채팅 고르기"></select>
+    <button class="btn icon-btn" id="chatClose" title="채팅 닫기">✕</button>
+  </div>
+  <button class="btn icon-btn" id="gear" title="설정">⚙</button>
+  <button class="btn icon-btn" id="fs" title="전체 화면 (F11)">⛶</button>
+</div>
+<div class="panel" id="panel"></div>
+<div class="settings" id="settings">
+  <h3>설정</h3>
+  <label class="opt">
+    <input type="checkbox" id="split">
+    <div><b>숲 4개 이상 보기</b><span>숲 방송 3개마다 저장 공간을 나눠 4개 넘게 동시에 볼 수 있게 합니다. 새로 여는 숲 방송부터 적용됩니다.</span></div>
+  </label>
+  <label class="opt">
+    <input type="checkbox" id="chzzkHq">
+    <div><b>치지직 고화질</b><span>확장 프로그램 없이 치지직을 1080p로 봅니다. 새로 여는 치지직 방송부터 적용됩니다.</span></div>
+  </label>
+  <div class="about">
+    <span id="version">모아봄</span>
+    <button class="btn" id="report">오류 제보</button>
+  </div>
+  <div class="report" id="reportBox">
+    아래 주소로 버전, 플랫폼·방송, 무슨 일이 있었는지 적어 보내 주세요.<br>
+    <b>gitter0001@gmail.com</b>
+    <div class="acts">
+      <button class="btn" id="copyMail">주소 복사</button>
+      <button class="btn" id="openMail">메일 앱으로 쓰기</button>
+    </div>
+  </div>
+</div>
+
+<div class="empty" id="empty">
+  <div class="welcome">
+    <h1>보고 싶은 방송을 추가하세요</h1>
+    <p>위 입력칸에 방송인 이름을 검색하거나 방송 주소를 붙여 넣으세요.<br>
+      예: <code>감스트</code> · <code>devil0108</code> · <code>https://chzzk.naver.com/live/…</code> · <code>youtube.com/@LofiGirl</code></p>
+    <div class="keys">
+      <h2>단축키 (방송 위에서도 동작)</h2>
+      <div><kbd>N</kbd> <kbd>/</kbd> <kbd>Ctrl</kbd>+<kbd>L</kbd></div><span>방송 추가 · 검색</span>
+      <div><kbd>1</kbd>~<kbd>9</kbd></div><span>방송 선택 (소리 켜기)</span>
+      <div><kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd></div><span>다음 / 이전 방송 선택</span>
+      <div><kbd>M</kbd></div><span>음소거 켜기/끄기</span>
+      <div><kbd>Q</kbd></div><span>선택한 방송 화질 바꾸기 (최고 → 자동 → 저화질)</span>
+      <div><kbd>F</kbd></div><span>선택한 방송 크게 보기 (포커스 / 격자)</span>
+      <div><kbd>F11</kbd></div><span>전체 화면</span>
+      <div><kbd>C</kbd> · <kbd>D</kbd> · <kbd>V</kbd></div><span>채팅 · 창 분리 · 사이트 보기</span>
+      <div><kbd>R</kbd> · <kbd>Delete</kbd></div><span>새로고침 · 닫기</span>
+      <div><kbd>Alt</kbd>+<kbd>←</kbd> <kbd>→</kbd></div><span>순서 옮기기</span>
+      <div><kbd>?</kbd></div><span>단축키 도움말</span>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+  const { invoke } = window.__TAURI__.core;
+  const { listen } = window.__TAURI__.event;
+  const $ = (id) => document.getElementById(id);
+  const PF = { soop: '숲', chzzk: '치지직', cime: '씨미', youtube: '유튜브', twitch: '트위치', kick: '킥' };
+
+  let snap = { tiles: [], fullscreen: false };
+
+  let toastTimer;
+  function toast(msg) {
+    const el = $('toast');
+    el.textContent = msg;
+    el.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => el.classList.remove('show'), 3500);
+  }
+  const call = (cmd, args) => invoke(cmd, args).catch((e) => toast(String(e)));
+
+  function render(s) {
+    snap = s;
+    document.querySelectorAll('#layout .btn').forEach((b) => b.classList.toggle('on', b.dataset.layout === s.layout));
+    $('split').checked = s.splitSoop;
+    $('chzzkHq').checked = s.chzzkHq;
+    $('quality').value = s.quality;
+    $('count').textContent = s.tiles.length ? `방송 ${s.tiles.length}개` : '';
+    $('empty').classList.toggle('hidden', s.tiles.length > 0);
+    renderChat(s);
+  }
+
+  // ---------- 채팅 드롭다운 ----------
+  // 오른쪽 채팅 영역에는 한 번에 하나만 보이고, 여기서 어느 방송 채팅을 볼지 고른다.
+  function renderChat(s) {
+    const shown = s.chatShown;
+    $('chatctl').classList.toggle('hidden', s.tiles.length === 0);
+    $('chatOpen').classList.toggle('hidden', shown != null);
+    $('chatSel').classList.toggle('hidden', shown == null);
+    $('chatClose').classList.toggle('hidden', shown == null);
+    const sel = $('chatSel');
+    sel.replaceChildren(...s.tiles.map((t, i) => {
+      const o = document.createElement('option');
+      o.value = t.id;
+      o.textContent = `${i + 1}. ${t.name || t.channel} · ${PF[t.platform]}${t.detached ? ' (분리 창)' : ''}`;
+      return o;
+    }));
+    if (shown != null) sel.value = String(shown);
+  }
+  $('chatOpen').addEventListener('click', () => call('command', { cmd: 'chat' }));
+  $('chatClose').addEventListener('click', () => call('show_chat', { id: null }));
+  $('chatSel').addEventListener('change', (e) => call('show_chat', { id: Number(e.target.value) }));
+
+  // ---------- 추가 / 검색 ----------
+  // 주소나 단축 표기면 바로 추가하고, 아니면 방송인 검색으로 본다.
+  const LOOKS_LIKE_ADDRESS = /^(https?:\/\/|[\w-]+(\.[\w-]+)+\/|(soop|숲|chzzk|치지직|yt|youtube|유튜브|twitch|트위치|kick|킥):)/i;
+  let hits = [];
+  let active = -1;
+  const added = new Set();
+
+  async function addInput(input, keepOpen = false) {
+    try {
+      await invoke('add_tile', { input });
+      added.add(input);
+      if (keepOpen) renderHits();
+      else closePanel(true);
+    } catch (e) {
+      toast(String(e));
+    }
+  }
+
+  function openPanel() {
+    closeSettings(false);
+    $('panel').classList.add('open');
+    syncPanel();
+  }
+  function closePanel(clear) {
+    $('panel').classList.remove('open');
+    hits = [];
+    active = -1;
+    if (clear) $('q').value = '';
+    syncPanel();
+  }
+  function closeSettings(sync = true) {
+    $('settings').classList.remove('open');
+    $('gear').classList.remove('on');
+    if (sync) syncPanel();
+  }
+  function closeAll() {
+    if ($('panel').classList.contains('open')) closePanel(false);
+    if ($('settings').classList.contains('open')) closeSettings();
+  }
+  $('gear').addEventListener('click', () => {
+    if ($('settings').classList.contains('open')) return closeSettings();
+    if ($('panel').classList.contains('open')) closePanel(false);
+    $('settings').classList.add('open');
+    $('gear').classList.add('on');
+    syncPanel();
+  });
+  // 패널을 검색창 아래에 맞추고, 앱에 패널 영역을 알려 그 부분만 방송 위에 겹쳐 보이게 한다.
+  function syncPanel() {
+    requestAnimationFrame(() => {
+      const p = $('panel');
+      const st = $('settings');
+      if (st.classList.contains('open')) {
+        const r = st.getBoundingClientRect();
+        return call('set_panel', { x: r.left, width: r.width, height: r.height });
+      }
+      if (!p.classList.contains('open')) return call('set_panel', { x: 0, width: 0, height: 0 });
+      const f = $('add').getBoundingClientRect();
+      const width = Math.min(Math.max(f.width, 460), innerWidth - f.left - 10);
+      p.style.left = `${f.left}px`;
+      p.style.width = `${width}px`;
+      call('set_panel', { x: f.left, width, height: p.offsetHeight });
+    });
+  }
+  addEventListener('resize', syncPanel);
+  // 방송을 누르는 등 다른 곳으로 포커스가 옮겨 가면 결과·설정을 닫는다.
+  addEventListener('blur', closeAll);
+  addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('settings').classList.contains('open')) closeSettings(); });
+
+  function status(text) {
+    $('panel').innerHTML = `<div class="status"></div>`;
+    $('panel').firstChild.textContent = text;
+    openPanel();
+  }
+
+  function renderHits() {
+    const p = $('panel');
+    p.replaceChildren();
+    if (!hits.length) return status('검색 결과가 없습니다.');
+    hits.forEach((h, i) => {
+      const row = document.createElement('div');
+      row.className = 'hit' + (h.live ? '' : ' offline') + (i === active ? ' active' : '');
+      const img = h.image ? Object.assign(document.createElement('img'), { src: h.image, loading: 'lazy', referrerPolicy: 'no-referrer' })
+        : Object.assign(document.createElement('div'), { className: 'noimg' });
+      const info = document.createElement('div');
+      info.className = 'info';
+      const top = document.createElement('div');
+      top.className = 'top';
+      const pf = Object.assign(document.createElement('span'), { className: 'pf', textContent: PF[h.platform] });
+      pf.style.background = `var(--${h.platform})`;
+      if (h.platform === 'kick' || h.platform === 'chzzk') pf.style.color = '#000';
+      top.append(pf, Object.assign(document.createElement('span'), { className: 'name', textContent: h.name }));
+      if (h.live) top.append(Object.assign(document.createElement('span'), { className: 'live', textContent: 'LIVE' }));
+      info.append(top);
+      if (h.title) info.append(Object.assign(document.createElement('div'), { className: 'title', textContent: h.title }));
+      row.append(img, info);
+      if (added.has(h.input)) row.append(Object.assign(document.createElement('span'), { className: 'added', textContent: '추가됨' }));
+      row.onclick = (e) => addInput(h.input, e.shiftKey || e.ctrlKey);
+      p.append(row);
+    });
+    p.append(Object.assign(document.createElement('div'), { className: 'hint', textContent: '↑↓ 이동 · Enter 추가 · Shift+Enter 여러 개 추가 · Esc 닫기' }));
+    openPanel();
+    p.querySelector('.hit.active')?.scrollIntoView({ block: 'nearest' });
+  }
+
+  let searchSeq = 0;
+  async function search(query) {
+    const seq = ++searchSeq;
+    status(`'${query}' 검색 중…`);
+    try {
+      const result = await invoke('search', { query });
+      if (seq !== searchSeq) return;
+      hits = result;
+      active = hits.length ? 0 : -1;
+      renderHits();
+    } catch (e) {
+      status(String(e));
+    }
+  }
+
+  // 치지직 채널 ID(32자리 16진수)는 바로 추가한다. 영문·숫자 한 단어는 숲 방송국이 있으면 추가하고, 없으면 검색한다.
+  const CHZZK_ID = /^[0-9a-f]{32}$/i;
+  const SOOP_ID = /^[a-z0-9_]{3,24}$/i;
+  async function addOrSearch(q) {
+    if (LOOKS_LIKE_ADDRESS.test(q) || CHZZK_ID.test(q)) return addInput(q);
+    if (SOOP_ID.test(q)) {
+      status(`'${q}' 확인 중…`);
+      const exists = await invoke('soop_exists', { id: q }).catch(() => false);
+      if ($('q').value.trim() !== q) return;
+      if (exists) return addInput(`soop:${q.toLowerCase()}`);
+    }
+    search(q);
+  }
+
+  $('add').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const q = $('q').value.trim();
+    if (q) addOrSearch(q);
+  });
+
+  $('q').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      if ($('panel').classList.contains('open')) closePanel(false);
+      else $('q').blur();
+    } else if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && hits.length) {
+      e.preventDefault();
+      active = (active + (e.key === 'ArrowDown' ? 1 : hits.length - 1)) % hits.length;
+      renderHits();
+    } else if (e.key === 'Enter' && hits.length && active >= 0 && !e.isComposing) {
+      // 결과가 떠 있으면 Enter는 고른 결과를 추가한다. 검색어를 바꿨다면 다시 검색한다.
+      if ($('q').dataset.searched === $('q').value.trim()) {
+        e.preventDefault();
+        addInput(hits[active].input, e.shiftKey);
+      }
+    }
+  });
+  $('q').addEventListener('input', () => {
+    if (!$('q').value.trim()) closePanel(false);
+  });
+  // 마지막으로 검색한 문구를 기억해, 같은 문구에서 Enter를 누르면 결과 추가로 처리한다.
+  const origSearch = search;
+  search = (q) => { $('q').dataset.searched = q; return origSearch(q); };
+
+  window.__focusAdd = () => {
+    const q = $('q');
+    q.focus();
+    q.select();
+  };
+
+  // ---------- 설정 ----------
+  document.querySelectorAll('#layout .btn').forEach((b) =>
+    b.addEventListener('click', () => call('set_layout', { layout: b.dataset.layout })));
+  $('split').addEventListener('change', (e) => call('set_split_soop', { on: e.target.checked }));
+  $('chzzkHq').addEventListener('change', (e) => call('set_chzzk_hq', { on: e.target.checked }));
+  $('quality').addEventListener('change', (e) => call('set_quality', { quality: e.target.value }));
+  $('fs').addEventListener('click', () => call('command', { cmd: 'fullscreen' }));
+  // 메일 앱이 없는 PC가 많아 주소 복사를 먼저 보여 주고, 메일 앱 열기는 따로 고르게 한다.
+  $('report').addEventListener('click', () => {
+    $('reportBox').classList.toggle('open');
+    syncPanel();
+  });
+  $('copyMail').addEventListener('click', async () => {
+    const text = `gitter0001@gmail.com`;
+    try {
+      await navigator.clipboard.writeText(text);
+      $('copyMail').textContent = '복사했어요';
+      setTimeout(() => ($('copyMail').textContent = '주소 복사'), 2000);
+    } catch {
+      toast(text);
+    }
+  });
+  $('openMail').addEventListener('click', () => call('open_report'));
+  invoke('app_version').then((v) => ($('version').textContent = `모아봄 v${v}`));
+
+  // ---------- 단축키 (방송 위 오버레이와 같은 배치) ----------
+  const editable = (el) => !!el && (el.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(el.tagName));
+  function keyCommand(e) {
+    if (e.ctrlKey || e.metaKey) return e.code === 'KeyL' ? ['add'] : null;
+    if (e.altKey) {
+      if (e.code === 'ArrowLeft') return ['move', -1];
+      if (e.code === 'ArrowRight') return ['move', 1];
+      return null;
+    }
+    const digit = /^(?:Digit|Numpad)([1-9])$/.exec(e.code);
+    if (digit) return ['select', Number(digit[1])];
+    switch (e.code) {
+      case 'Tab': return [e.shiftKey ? 'prev' : 'next'];
+      case 'KeyM': return ['mute'];
+      case 'KeyQ': return ['quality'];
+      case 'KeyF': return ['layout'];
+      case 'F11': return ['fullscreen'];
+      case 'Escape': return snap.fullscreen ? ['exitfullscreen'] : null;
+      case 'KeyC': return ['chat'];
+      case 'KeyD': return ['detach'];
+      case 'KeyV': return ['siteview'];
+      case 'KeyR': return ['reload'];
+      case 'Delete': return ['close'];
+      case 'KeyN': return ['add'];
+      case 'Slash': return [e.shiftKey ? 'help' : 'add'];
+      case 'F1': return ['help'];
+      default: return null;
+    }
+  }
+  addEventListener('keydown', (e) => {
+    // 입력칸에서도 Ctrl+L, F11은 동작하게 한다.
+    const typing = editable(e.target);
+    if (e.isComposing || (typing && !(e.ctrlKey && e.code === 'KeyL') && e.code !== 'F11')) return;
+    const k = keyCommand(e);
+    if (!k) return;
+    e.preventDefault();
+    if (k[0] === 'add') return window.__focusAdd();
+    call('command', { cmd: k[0], arg: k[1] || 0 });
+  }, true);
+
+  listen('tiles', (e) => render(e.payload));
+  listen('toast', (e) => toast(String(e.payload)));
+  listen('close-panel', closeAll);
+  invoke('list_tiles').then(render);
+</script>
+</body>
+</html>

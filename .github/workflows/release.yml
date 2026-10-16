@@ -1,0 +1,58 @@
+name: 빌드 및 릴리스
+
+# v로 시작하는 태그(v0.1.0 등)를 올리면 설치 파일을 빌드해 GitHub 릴리스에 올린다.
+# Actions 탭에서 수동 실행하면 빌드만 하고 결과물을 아티팩트로 남긴다.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # rust-cache가 ~/.cargo/bin도 캐시하므로 두 번째 실행부터는 설치를 건너뛴다.
+      - name: Tauri CLI 설치
+        run: cargo install tauri-cli --version "^2" --locked
+
+      # 태그 이름(v1.2.3)에서 버전을 가져와 설치 파일 버전에 넣는다.
+      - name: 태그 버전 적용
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          $path = 'src-tauri/tauri.conf.json'
+          $conf = Get-Content $path -Raw | ConvertFrom-Json
+          $conf.version = $version
+          $conf | ConvertTo-Json -Depth 32 | Set-Content $path -Encoding utf8NoBOM
+
+      - name: 빌드
+        working-directory: src-tauri
+        run: cargo tauri build
+
+      - name: 아티팩트 업로드
+        uses: actions/upload-artifact@v4
+        with:
+          name: moabom-setup
+          path: src-tauri/target/release/bundle/nsis/*.exe
+
+      - name: 릴리스 생성
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: 모아봄 ${{ github.ref_name }}
+          files: src-tauri/target/release/bundle/nsis/*.exe
+          generate_release_notes: true

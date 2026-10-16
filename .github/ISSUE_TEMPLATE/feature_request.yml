@@ -1,0 +1,14 @@
+name: 기능 제안
+description: 이런 기능이 있으면 좋겠어요
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: 어떤 기능이 있으면 좋겠나요?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: 왜 필요한가요? 지금은 어떻게 하고 있나요?

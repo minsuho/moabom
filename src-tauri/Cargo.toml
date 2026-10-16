@@ -1,0 +1,31 @@
+[package]
+name = "moabom"
+version = "0.1.0"
+description = "Multi-platform live stream multiview"
+edition = "2024"
+license = "PolyForm-Strict-1.0.0"
+repository = "https://github.com/minsuho/moabom"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["unstable"] }
+tauri-plugin-single-instance = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+url = "2"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "query", "native-tls", "gzip"] }
+
+# Tauri 내부와 같은 버전이어야 한다 (타일별 음소거에 WebView2 API를 직접 사용)
+[target.'cfg(windows)'.dependencies]
+webview2-com = "0.39"
+windows-core = "0.62"
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

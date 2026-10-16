@@ -1,0 +1,53 @@
+name: 오류 제보
+description: 모아봄이 제대로 동작하지 않을 때
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: 제보해 주셔서 고마워요! 아래 내용을 채워 주시면 원인을 빨리 찾을 수 있어요.
+  - type: input
+    id: version
+    attributes:
+      label: 모아봄 버전
+      description: 설정(⚙) 창 아래에 나와 있어요.
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: 문제가 생긴 플랫폼
+      multiple: true
+      options:
+        - 숲(SOOP)
+        - 치지직
+        - YouTube
+        - Twitch
+        - Kick
+        - 씨미
+        - 플랫폼과 상관없음 (앱 전체)
+    validations:
+      required: true
+  - type: input
+    id: channel
+    attributes:
+      label: 방송인 또는 방송 주소
+      placeholder: 예) 감스트, https://chzzk.naver.com/live/...
+  - type: textarea
+    id: what
+    attributes:
+      label: 무엇을 했더니 어떻게 됐나요?
+      placeholder: |
+        예) 치지직 방송을 3개 추가하고 포커스로 바꿨더니 두 번째 방송이 검은 화면으로 멈췄어요.
+    validations:
+      required: true
+  - type: textarea
+    id: screenshot
+    attributes:
+      label: 스크린샷
+      description: 이미지를 여기로 끌어다 놓으면 첨부돼요.
+  - type: input
+    id: windows
+    attributes:
+      label: Windows 버전
+      placeholder: 예) Windows 11
