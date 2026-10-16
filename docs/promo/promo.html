@@ -1,0 +1,36 @@
+<!doctype html><meta charset="utf-8">
+<style>
+  @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css');
+  html,body{margin:0}
+  .card{width:1600px;height:900px;box-sizing:border-box;padding:64px 80px 0;background:linear-gradient(180deg,#f4f5fb,#e9ebf5);
+    font-family:Pretendard,"Malgun Gothic",sans-serif;display:flex;flex-direction:column;align-items:center;overflow:hidden;position:relative}
+  .brand{position:absolute;left:44px;top:36px;display:flex;align-items:center;gap:12px;font:800 26px/1 Pretendard;color:#1b1b24}
+  .brand img{width:44px;height:44px}
+  h1{margin:14px 0 10px;font-size:64px;font-weight:800;letter-spacing:-.03em;color:#16161d;text-align:center}
+  h1 em{font-style:normal;color:#5b5ff0}
+  p{margin:0 0 34px;font-size:28px;color:#5a5c6e;letter-spacing:-.01em;text-align:center}
+  .shot{width:1180px;border-radius:18px 18px 0 0;box-shadow:0 24px 60px rgba(20,20,60,.28);display:block}
+  .shot.full{width:auto;height:612px;border-radius:16px}
+  .pills{display:flex;gap:14px;margin:-12px 0 28px}
+  .pill{font:700 22px/1 Pretendard;padding:12px 20px;border-radius:999px;color:#fff}
+</style>
+<body>
+<div class="card" id="c1">
+  <div class="brand"><img src="../../src-tauri/icons/icon.png">모아봄</div>
+  <h1>여러 방송을 <em>한 화면</em>에 모아 보세요!</h1>
+  <p>보고 싶은 방송 여러 개를 한 창에서 동시에, 멀티뷰</p>
+  <img class="shot" src="../screenshots/multiview.png">
+</div>
+<div class="card" id="c2">
+  <div class="brand"><img src="../../src-tauri/icons/icon.png">모아봄</div>
+  <h1>이름만 <em>검색</em>하면 바로 추가</h1>
+  <p>방송인 이름, 방송 주소, 방송국 아이디 모두 OK</p>
+  <img class="shot" src="../screenshots/search.png">
+</div>
+<div class="card" id="c3">
+  <div class="brand"><img src="../../src-tauri/icons/icon.png">모아봄</div>
+  <h1>보고 싶은 방송은 <em>크게</em>, 꺼진 방송은 <em>깔끔하게</em></h1>
+  <p>방송이 다시 켜지면 자동으로 연결돼요</p>
+  <img class="shot full" src="../screenshots/focus-offline.png">
+</div>
+</body>

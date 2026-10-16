@@ -10,6 +10,10 @@
 
 [**⬇ 최신 버전 다운로드**](../../releases/latest) · [**💜 후원하기**](https://fairy.hada.io/@moabom)
 
+<br>
+
+<img src="docs/screenshots/multiview.png" alt="방송 4개를 격자로 띄운 모아봄 화면">
+
 </div>
 
 ---
@@ -34,6 +38,12 @@
 - ↔ **끌어서 자리 바꾸기** — 방송 위 번호·이름을 잡고 다른 칸에 놓으면 자리가 바뀌어요.
 - 🟢 **치지직 1080p** — 별도 확장 프로그램 없이 고화질로 볼 수 있어요.
 - 🔵 **숲 4개 이상** — 숲 방송을 4개 넘게 동시에 볼 수 있어요.
+
+| 검색해서 바로 추가 | 크게 보기 · 방송 종료 표시 |
+|---|---|
+| <img src="docs/screenshots/search.png" alt="검색 결과가 방송 위에 겹쳐 뜬 화면"> | <img src="docs/screenshots/focus-offline.png" alt="한 방송을 크게 보고, 꺼진 방송은 종료 화면으로 보이는 화면"> |
+
+> 스크린샷 속 방송 화면은 흐리게 처리했고, 방송인 이름과 방송 제목은 예시로 바꿨어요.
 
 ## 설치 방법
 
@@ -159,6 +169,7 @@ cargo tauri build    # 설치 파일 생성 (target/release/bundle/nsis/)
 │   ├── icons/
 │   ├── Cargo.toml
 │   └── tauri.conf.json
+├── docs/screenshots/      # README 스크린샷
 ├── .github/workflows/     # 자동 빌드·릴리스
 └── THIRD_PARTY.md         # 제3자 구성요소와 라이선스
 ```
