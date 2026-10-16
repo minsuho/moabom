@@ -681,16 +681,35 @@ fn place(app: &AppHandle, label: &str, r: Rect) {
 
 #[cfg(windows)]
 fn set_bounds_native(wv: &Webview, r: Rect) {
-    let scale = wv.window().scale_factor().unwrap_or(1.0);
-    let px = |v: f64| (v * scale).round() as i32;
-    let rect = windows::Win32::Foundation::RECT {
-        left: px(r.x),
-        top: px(r.y),
-        right: px(r.x + r.w.max(1.0)),
-        bottom: px(r.y + r.h.max(1.0)),
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2Controller3, COREWEBVIEW2_BOUNDS_MODE, COREWEBVIEW2_BOUNDS_MODE_USE_RASTERIZATION_SCALE,
     };
+    use windows_core::Interface;
+    let scale = wv.window().scale_factor().unwrap_or(1.0);
     let _ = wv.with_webview(move |p| unsafe {
-        let _ = p.controller().SetBounds(rect);
+        let controller = p.controller();
+        // 숲 팝업에서 온 웹뷰는 좌표에 화면 배율을 스스로 곱하는 모드일 수 있다.
+        // 그 경우 물리 픽셀을 그 배율로 나눠 넘겨야 배율이 두 번 들어가지 않는다.
+        let mut divide = 1.0;
+        if let Ok(c3) = controller.cast::<ICoreWebView2Controller3>() {
+            let mut mode = COREWEBVIEW2_BOUNDS_MODE::default();
+            let mut raster = 1.0;
+            if c3.BoundsMode(&mut mode).is_ok()
+                && mode == COREWEBVIEW2_BOUNDS_MODE_USE_RASTERIZATION_SCALE
+                && c3.RasterizationScale(&mut raster).is_ok()
+                && raster > 0.0
+            {
+                divide = raster;
+            }
+        }
+        let px = |v: f64| (v * scale / divide).round() as i32;
+        let rect = windows::Win32::Foundation::RECT {
+            left: px(r.x),
+            top: px(r.y),
+            right: px(r.x + r.w.max(1.0)),
+            bottom: px(r.y + r.h.max(1.0)),
+        };
+        let _ = controller.SetBounds(rect);
     });
 }
 

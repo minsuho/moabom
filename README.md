@@ -8,7 +8,7 @@
 
 SOOP · 치지직 · 씨미 · YouTube · Twitch · Kick
 
-[**⬇ 최신 버전 다운로드**](../../releases/latest)
+[**⬇ 최신 버전 다운로드**](../../releases/latest) · [**💜 후원하기**](https://fairy.hada.io/@moabom)
 
 </div>
 
@@ -96,6 +96,10 @@ SOOP · 치지직 · 씨미 · YouTube · Twitch · Kick
 
 방송 여러 개를 한꺼번에 최고 화질로 틀면 무거워요. 위쪽 화질 버튼에서 **자동**이나 **저화질**로 바꿔 보세요.
 </details>
+
+## 후원하기
+
+모아봄이 마음에 드셨다면 [**Fairy에서 후원**](https://fairy.hada.io/@moabom)해 주세요. 계속 고치고 다듬는 데 큰 힘이 돼요. 🙏
 
 ## 문제가 생겼어요 / 제안할 게 있어요
 
