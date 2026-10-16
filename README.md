@@ -6,7 +6,7 @@
 
 **여러 라이브 방송을 한 화면에 모아 보는 Windows 멀티뷰 프로그램**
 
-숲 · 치지직 · 씨미 · 유튜브 · 트위치 · 킥
+숲(SOOP) · 치지직(CHZZK) · 씨미(CIME) · 유튜브(YouTube) · 트위치(Twitch) · 킥(Kick)
 
 [**⬇ 최신 버전 다운로드**](../../releases/latest) · [**💜 후원하기**](https://fairy.hada.io/@moabom)
 

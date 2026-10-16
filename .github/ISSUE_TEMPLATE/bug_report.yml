@@ -19,12 +19,12 @@ body:
       label: 문제가 생긴 플랫폼
       multiple: true
       options:
-        - 숲
-        - 치지직
-        - 씨미
-        - 유튜브
-        - 트위치
-        - 킥
+        - 숲(SOOP)
+        - 치지직(CHZZK)
+        - 씨미(CIME)
+        - 유튜브(YouTube)
+        - 트위치(Twitch)
+        - 킥(Kick)
         - 플랫폼과 상관없음 (앱 전체)
     validations:
       required: true
