@@ -212,7 +212,7 @@ git tag -a v0.3.0 --cleanup=verbatim -F 노트.md   # 노트.md에 바뀐 점을
 git push origin v0.3.0
 ```
 
-저장소 비밀값으로 `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`(필수)와 `VT_API_KEY`(VirusTotal 검사, 선택)를 등록해 두세요.
+저장소 비밀값으로 `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`(필수)와 `VT_API_KEY`(VirusTotal 검사, 선택)를 등록해 두세요. `VT_API_KEY`가 있으면 릴리스할 때 파일을 VirusTotal에 올리고 검사 결과를 릴리스 노트에 적어요. 이미 나온 릴리스는 Actions 탭의 **바이러스 검사** 워크플로에 태그를 넣어 실행하면 돼요.
 
 </details>
 

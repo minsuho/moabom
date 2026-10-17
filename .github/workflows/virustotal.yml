@@ -1,0 +1,51 @@
+name: 바이러스 검사
+
+# 이미 올라간 릴리스의 파일을 VirusTotal로 검사하고, 릴리스 노트의 검사 결과 부분을 새로 쓴다.
+# Actions 탭에서 태그(v0.2.1 등)를 넣고 실행한다. 저장소 비밀값 VT_API_KEY가 필요하다.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 검사할 릴리스 태그 (예 v0.2.1)
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 검사하고 릴리스 노트 고치기
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VT_API_KEY: ${{ secrets.VT_API_KEY }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          if (-not $env:VT_API_KEY) { throw '저장소 비밀값 VT_API_KEY가 없어요.' }
+          gh release download $env:TAG -p '*_x64-setup.exe' -p '*_x64-portable.zip' -D dl
+          Expand-Archive (Get-Item dl/*_x64-portable.zip).FullName dl/portable
+          $setup = Get-Item dl/*_x64-setup.exe
+          $exe = Get-Item dl/portable/Moabom.exe
+
+          $lines = ./scripts/virustotal.ps1 -Files $setup.FullName, $exe.FullName `
+            -Labels '설치판', '포터블 실행 파일(`Moabom.exe`)'
+          $vt = "## 바이러스 검사 (VirusTotal)`n`n" + ($lines -join "`n") + "`n"
+
+          # 이전 검사 부분이 있으면 다음 제목(## ...) 앞까지 바꾸고, 없으면 자동 변경 목록(## What's Changed) 앞이나 맨 끝에 넣는다.
+          $body = gh release view $env:TAG --json body -q .body | Out-String
+          $section = '(?ms)^## 바이러스 검사 \(VirusTotal\)\s*$.*?(?=^## |\z)'
+          if ($body -match $section) {
+            $body = [regex]::Replace($body, $section, { param($m) "$vt`n" })
+          } elseif ($body -match "(?m)^## What's Changed") {
+            $body = $body -replace "(?m)^(?=## What's Changed)", "$vt`n"
+          } else {
+            $body = $body.TrimEnd() + "`n`n" + $vt
+          }
+          $body | Set-Content notes.md -Encoding utf8NoBOM
+          gh release edit $env:TAG --notes-file notes.md
