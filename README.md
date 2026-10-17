@@ -205,11 +205,11 @@ cargo tauri build    # 설치 파일 생성 (target/release/bundle/nsis/)
 
 `v`로 시작하는 태그를 올리면 GitHub Actions가 설치 파일을 빌드해 릴리스에 올려요.
 버전 번호는 태그에서 가져오니 `tauri.conf.json`을 따로 고치지 않아도 돼요.
-태그 메시지는 릴리스 노트와 앱의 업데이트 안내에 그대로 들어가요.
+태그 메시지는 릴리스 노트와 앱의 업데이트 안내에 그대로 들어가요. `--cleanup=verbatim`이 없으면 `#`으로 시작하는 제목 줄이 지워져요.
 
 ```sh
-git tag -a v0.2.0 -m "바뀐 점을 여기에"
-git push origin v0.2.0
+git tag -a v0.3.0 --cleanup=verbatim -F 노트.md   # 노트.md에 바뀐 점을 마크다운으로
+git push origin v0.3.0
 ```
 
 저장소 비밀값으로 `TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`(필수)와 `VT_API_KEY`(VirusTotal 검사, 선택)를 등록해 두세요.
