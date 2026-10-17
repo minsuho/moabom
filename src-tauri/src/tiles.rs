@@ -1361,6 +1361,29 @@ fn set_volume(app: &AppHandle, id: u32, volume: i64) {
     emit(app);
 }
 
+/// 사이트 음소거 버튼을 눌렀을 때: 켜면 이 방송 소리를 켜고(선택), 끄면 이 방송 소리를 끈다.
+/// 같이 듣기로 듣던 방송이면 같이 듣기만 끄고, 선택한 방송이면 전체 음소거로 바꾼다(스피커 버튼과 같다).
+fn set_audible(app: &AppHandle, id: u32, on: bool) -> Result<(), String> {
+    {
+        let state = app.state::<Tiles>();
+        let mut g = state.0.lock().unwrap();
+        let tile = g.get(id)?.clone();
+        if g.audible(&tile) == on {
+            return Ok(());
+        }
+        if on {
+            g.selected = Some(id);
+            g.muted = false;
+        } else if tile.mix && g.selected != Some(id) {
+            g.get_mut(id)?.mix = false;
+        } else {
+            g.muted = true;
+        }
+    }
+    refresh(app);
+    Ok(())
+}
+
 /// 같이 듣기: 선택한 방송이 아니어도 이 방송 소리를 함께 낸다(합방을 볼 때).
 fn toggle_mix(app: &AppHandle, id: u32) -> Result<(), String> {
     {
@@ -1510,6 +1533,7 @@ async fn run_command(
                 "quality" => cycle_quality(&app, id)?,
                 "volume" => set_volume(&app, id, arg),
                 "mix" => toggle_mix(&app, id)?,
+                "setaudible" => set_audible(&app, id, arg != 0)?,
                 _ => {}
             }
         }

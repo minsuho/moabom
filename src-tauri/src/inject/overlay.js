@@ -226,6 +226,7 @@
     off.classList.toggle('on', st.offline);
     window.__mvOffline = st.offline;
     keepSilent(st.offline);
+    applyMute();
     // 종료 화면 옆으로 사이트 스크롤바가 보이지 않게 한다.
     noScroll.textContent = st.offline ? 'html, body { overflow: hidden !important; }' : '';
     if (!noScroll.isConnected && document.head) document.head.appendChild(noScroll);
@@ -395,6 +396,9 @@
   // - 사용자가 사이트 음량 막대·키로 바꾸면 그 값을 앱에 알린다.
   // - 사이트가 스스로 바꾼 음량(저장해 둔 음량을 페이지를 열 때 적용하는 등)은 앱 값으로 되돌린다.
   //   숲·치지직은 음량을 사이트에 하나만 저장해서, 그대로 두면 같은 플랫폼 방송끼리 음량이 섞인다.
+  // 숲 플레이어의 음량·음소거 조작부(사용자가 막대·음소거 버튼을 누를 때 쓰는 것)
+  const soopControls = () => Object.values(window.liveView?.aContainer || {})
+    .find((c) => typeof c?.setVolumeUI === 'function' && typeof c.volume === 'function' && typeof c.mute === 'function');
   let volume = 100;
   // 앱이 이 방송 음량을 알려 주기 전에는 페이지 음량을 건드리지도, 앱에 알리지도 않는다.
   let volumeKnown = false;
@@ -407,7 +411,7 @@
     const yt = document.querySelector('#movie_player');
     if (typeof yt?.setVolume === 'function' && yt.getVolume?.() !== volume) yt.setVolume(volume);
     // 숲 플레이어 막대는 영상 음량 변화를 보지 않아서, 사용자가 막대를 움직일 때 쓰는 함수를 직접 부른다.
-    const soop = Object.values(window.liveView?.aContainer || {}).find((c) => typeof c?.setVolumeUI === 'function' && typeof c.volume === 'function');
+    const soop = soopControls();
     if (soop && Math.abs((soop.nCurrentVolume ?? -1) - volume / 100) > 0.005) soop.volume(volume / 100);
     for (const v of document.querySelectorAll('video')) {
       if (!same(v)) v.volume = volume / 100;
@@ -418,10 +422,35 @@
     volumeKnown = true;
     applyVolume();
   };
+  // 음소거: 앱에서 소리를 끈 방송(선택하지 않았거나 전체 음소거)은 사이트 플레이어도 음소거로 보이게 한다.
+  // 실제로 소리를 막는 건 앱의 웹뷰 음소거이고, 이건 사이트 화면을 맞추기 위한 것이다.
+  // 꺼진 방송은 종료 화면 뒤에서 소리가 나지 않게 늘 음소거한다(keepSilent).
+  let audibleKnown = false;
+  const wantMuted = () => !st.audible || st.offline;
+  const applyMute = () => {
+    if (!audibleKnown) return;
+    const mute = wantMuted();
+    const yt = document.querySelector('#movie_player');
+    if (typeof yt?.isMuted === 'function' && yt.isMuted() !== mute) mute ? yt.mute() : yt.unMute();
+    const soop = soopControls();
+    if (soop && !!soop.isMuted !== mute) mute ? soop.mute() : soop.unmute();
+    for (const v of document.querySelectorAll('video')) {
+      if (v.muted !== mute) v.muted = mute;
+    }
+  };
+
   let reportFrame = 0;
   document.addEventListener('volumechange', (e) => {
     const v = e.target;
-    if (!volumeKnown || !(v instanceof HTMLVideoElement) || same(v)) return;
+    if (!(v instanceof HTMLVideoElement)) return;
+    // 사이트 음소거 버튼을 직접 누르면 앱에 알린다(켜면 이 방송 소리 켜기, 끄면 이 방송 소리 끄기).
+    // 사이트가 스스로 소리를 켠 것은 앱 상태(음소거)로 되돌린다. 사이트가 스스로 끈 것(광고 영상 등)은 그대로 둔다.
+    if (audibleKnown && !st.offline && v.muted !== wantMuted()) {
+      if (userJustActed()) send('setaudible', v.muted ? 0 : 1, true);
+      else if (!v.muted) applyMute();
+      return;
+    }
+    if (!volumeKnown || same(v)) return;
     if (!userJustActed()) return applyVolume();
     // 막대를 끄는 동안 이벤트가 많이 오므로 화면 프레임마다 한 번만 알린다.
     volume = Math.round(v.volume * 100);
@@ -429,8 +458,12 @@
     reportFrame = requestAnimationFrame(() => send('volume', volume, true));
   }, true);
   // 플레이어가 영상을 새로 붙이거나 다시 재생하면 음량이 돌아가므로 그때마다 다시 맞춘다.
-  document.addEventListener('play', applyVolume, true);
-  document.addEventListener('loadeddata', applyVolume, true);
+  const applyAudio = () => {
+    applyVolume();
+    applyMute();
+  };
+  document.addEventListener('play', applyAudio, true);
+  document.addEventListener('loadeddata', applyAudio, true);
 
   // ---------- 방송인·제목 ----------
   const text = (sel) => (document.querySelector(sel)?.textContent || '').trim();
@@ -492,6 +525,7 @@
   window.__mvOverlay = {
     set(next) {
       st = { ...st, ...next };
+      if ('audible' in next) audibleKnown = true;
       render();
     },
     toggleHelp() {
