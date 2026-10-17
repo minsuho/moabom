@@ -16,6 +16,8 @@
   body { display: flex; flex-direction: column; }
   .bar { flex: none; }
   button { font: inherit; color: inherit; }
+  .ic { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; }
 
   .bar { display: flex; align-items: center; gap: 8px; height: 52px; padding: 0 10px; border-bottom: 1px solid var(--line); user-select: none; }
   .logo { font-weight: 700; letter-spacing: -.02em; white-space: nowrap; margin-right: 2px; }
@@ -29,7 +31,8 @@
   .seg { display: flex; }
   .seg .btn { border-radius: 0; }
   .seg .btn:first-child { border-radius: 8px 0 0 8px; }
-  .seg .btn:last-child { border-radius: 0 8px 8px 0; margin-left: -1px; }
+  .seg .btn:last-child { border-radius: 0 8px 8px 0; }
+  .seg .btn + .btn { margin-left: -1px; }
   .seg .btn.on { background: #24243a; border-color: var(--accent); position: relative; }
   .spacer { flex: 1; }
   .count { color: var(--dim); white-space: nowrap; }
@@ -89,7 +92,39 @@
   .report b { color: var(--text); font-size: 13px; user-select: text; }
   .report .acts { display: flex; gap: 6px; margin-top: 8px; }
   .report .btn { height: 28px; font-size: 12px; }
-  #gear.on { border-color: var(--accent); background: #24243a; }
+  #gear.on, #groupBtn.on { border-color: var(--accent); background: #24243a; }
+  .upd { margin: 6px 8px 2px; padding: 10px; border-radius: 8px; background: var(--panel2); font-size: 12px; color: var(--dim); line-height: 1.6; }
+  .upd b { color: var(--text); }
+  .upd .acts { display: flex; gap: 6px; margin-top: 8px; }
+  .upd .btn { height: 28px; font-size: 12px; }
+  .upd .notes { max-height: 120px; overflow: auto; white-space: pre-wrap; margin-top: 6px; }
+  #updBtn { border-color: var(--accent); color: #c7d2fe; }
+  #updBtn.hidden { display: none; }
+
+  /* 그룹 창: 그룹 버튼 아래에 방송 위로 겹쳐 뜬다 */
+  .groups { display: none; position: fixed; top: 52px; width: 360px; z-index: 20; padding: 8px;
+    border: 1px solid var(--line); border-top: none; border-radius: 0 0 10px 10px; background: var(--panel); }
+  .groups.open { display: block; }
+  .groups h3 { margin: 4px 8px 8px; font-size: 13px; color: var(--dim); font-weight: 600; }
+  .glist { max-height: 300px; overflow-y: auto; }
+  .grow { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 8px; }
+  .grow:hover { background: var(--panel2); }
+  .grow .gname { flex: 1; min-width: 0; }
+  .grow .gname b { display: block; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .grow .gname span { display: block; color: var(--dim); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .grow .gname .gtiles { white-space: normal; line-height: 1.7; }
+  .grow .gname .pf { display: inline-block; margin-right: 4px; padding: 0 5px; font-size: 10px; line-height: 15px; vertical-align: 1px; }
+  .grow .btn { height: 28px; padding: 0 9px; font-size: 12px; }
+  .grow .btn.del.armed { border-color: var(--live); color: #fca5a5; }
+  .gempty { padding: 10px 8px; color: var(--dim); font-size: 12px; line-height: 1.6; }
+  .gsave { display: flex; gap: 6px; margin: 8px 8px 2px; padding-top: 10px; border-top: 1px solid var(--line); }
+  .gsave input { flex: 1; min-width: 0; height: 30px; padding: 0 10px; border-radius: 8px; border: 1px solid var(--line);
+    background: var(--panel2); color: var(--text); outline: none; font: inherit; }
+  .gsave input:focus { border-color: var(--accent); }
+  .gsave .btn { height: 30px; font-size: 12px; }
+  .wgroups { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 18px; }
+  .wgroups.hidden { display: none; }
+  .wgroups .btn { height: 32px; }
 
   .toast { position: fixed; right: 10px; top: 60px; max-width: 60%; padding: 8px 12px; border-radius: 8px; background: #3b1d1d;
     border: 1px solid var(--live); opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 10; }
@@ -97,6 +132,17 @@
 </style>
 </head>
 <body>
+<!-- 아이콘 모음: <svg class="ic"><use href="#i-이름"/></svg>로 쓴다 -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    <symbol id="i-chat" viewBox="0 0 24 24"><path d="M4 5h16v11H9l-5 4V5z"/></symbol>
+    <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
+    <symbol id="i-update" viewBox="0 0 24 24"><path d="M12 15V4M7 9l5-5 5 5M5 20h14"/></symbol>
+    <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
+    <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+    <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></symbol>
+  </defs>
+</svg>
 <div class="bar">
   <div class="logo">모아봄</div>
   <form id="add">
@@ -106,7 +152,8 @@
   </form>
   <div class="seg" id="layout">
     <button class="btn" data-layout="grid" title="격자 (F)">격자</button>
-    <button class="btn" data-layout="focus" title="선택한 방송 크게 (F)">포커스</button>
+    <button class="btn" data-layout="focus" title="선택한 방송 크게, 나머지는 오른쪽 (F)">포커스</button>
+    <button class="btn" data-layout="bottom" title="선택한 방송 크게, 나머지는 아래 (F)">아래 줄</button>
   </div>
   <select id="quality" class="sel" title="모든 방송 화질 (방송별로는 화면 위 버튼이나 Q로 바꾸기)">
     <option value="best">최고화질</option>
@@ -116,12 +163,14 @@
   <div class="spacer"></div>
   <span class="count" id="count"></span>
   <div class="chatctl" id="chatctl">
-    <button class="btn" id="chatOpen" title="선택한 방송 채팅 열기 (C)">💬 채팅</button>
+    <button class="btn" id="chatOpen" title="선택한 방송 채팅 열기 (C)"><svg class="ic"><use href="#i-chat"/></svg>채팅</button>
     <select id="chatSel" title="오른쪽에 띄울 채팅 고르기"></select>
-    <button class="btn icon-btn" id="chatClose" title="채팅 닫기">✕</button>
+    <button class="btn icon-btn" id="chatClose" title="채팅 닫기"><svg class="ic"><use href="#i-close"/></svg></button>
   </div>
-  <button class="btn icon-btn" id="gear" title="설정">⚙</button>
-  <button class="btn icon-btn" id="fs" title="전체 화면 (F11)">⛶</button>
+  <button class="btn hidden" id="updBtn" title="새 버전이 있어요"><svg class="ic"><use href="#i-update"/></svg>업데이트</button>
+  <button class="btn" id="groupBtn" title="방송 묶음을 저장하고 한 번에 열기"><svg class="ic"><use href="#i-folder"/></svg>그룹</button>
+  <button class="btn icon-btn" id="gear" title="설정"><svg class="ic"><use href="#i-settings"/></svg></button>
+  <button class="btn icon-btn" id="fs" title="전체 화면 (F11)"><svg class="ic"><use href="#i-fullscreen"/></svg></button>
 </div>
 <div class="panel" id="panel"></div>
 <div class="settings" id="settings">
@@ -134,10 +183,22 @@
     <input type="checkbox" id="chzzkHq">
     <div><b>치지직 고화질</b><span>확장 프로그램 없이 치지직을 1080p로 봅니다. 새로 여는 치지직 방송부터 적용됩니다.</span></div>
   </label>
+  <label class="opt">
+    <input type="checkbox" id="restore">
+    <div><b>지난 방송 다시 열기</b><span>모아봄을 켤 때 마지막으로 보던 방송을 그대로 엽니다.</span></div>
+  </label>
+  <label class="opt">
+    <input type="checkbox" id="notify">
+    <div><b>방송 시작 알림</b><span>꺼져 있던 방송이 시작되면 Windows 알림으로 알려 줍니다.</span></div>
+  </label>
   <div class="about">
     <span id="version">모아봄</span>
-    <button class="btn" id="report">오류 제보</button>
+    <span>
+      <button class="btn" id="checkUpd">업데이트 확인</button>
+      <button class="btn" id="report">오류 제보</button>
+    </span>
   </div>
+  <div class="upd" id="updBox" hidden></div>
   <div class="report" id="reportBox">
     아래 주소로 버전, 플랫폼·방송, 무슨 일이 있었는지 적어 보내 주세요.<br>
     <b>gitter0001@gmail.com</b>
@@ -148,17 +209,28 @@
   </div>
 </div>
 
+<div class="groups" id="groups">
+  <h3>그룹</h3>
+  <div class="glist" id="glist"></div>
+  <form class="gsave" id="gsave">
+    <input id="gname" type="text" maxlength="40" autocomplete="off" spellcheck="false" placeholder="그룹 이름 (예: 평일 조합)">
+    <button class="btn primary" type="submit">지금 방송 저장</button>
+  </form>
+</div>
+
 <div class="empty" id="empty">
   <div class="welcome">
     <h1>보고 싶은 방송을 추가하세요</h1>
     <p>위 입력칸에 방송인 이름을 검색하거나 방송 주소를 붙여 넣으세요.<br>
       예: <code>감스트</code> · <code>devil0108</code> · <code>https://chzzk.naver.com/live/…</code> · <code>youtube.com/@LofiGirl</code></p>
+    <div class="wgroups hidden" id="wgroups"></div>
     <div class="keys">
       <h2>단축키 (방송 위에서도 동작)</h2>
       <div><kbd>N</kbd> <kbd>/</kbd> <kbd>Ctrl</kbd>+<kbd>L</kbd></div><span>방송 추가 · 검색</span>
       <div><kbd>1</kbd>~<kbd>9</kbd></div><span>방송 선택 (소리 켜기)</span>
       <div><kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd></div><span>다음 / 이전 방송 선택</span>
       <div><kbd>M</kbd></div><span>음소거 켜기/끄기</span>
+      <div><kbd>A</kbd></div><span>같이 듣기 (선택하지 않아도 소리 내기)</span>
       <div><kbd>Q</kbd></div><span>선택한 방송 화질 바꾸기 (최고 → 자동 → 저화질)</span>
       <div><kbd>F</kbd></div><span>선택한 방송 크게 보기 (포커스 / 격자)</span>
       <div><kbd>F11</kbd></div><span>전체 화면</span>
@@ -175,6 +247,16 @@
   const { invoke } = window.__TAURI__.core;
   const { listen } = window.__TAURI__.event;
   const $ = (id) => document.getElementById(id);
+  // 아이콘 모음(#i-이름)에서 아이콘 하나를 만든다.
+  function icon(name) {
+    const NS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(NS, 'svg');
+    svg.setAttribute('class', 'ic');
+    const use = document.createElementNS(NS, 'use');
+    use.setAttribute('href', `#i-${name}`);
+    svg.append(use);
+    return svg;
+  }
   const PF = { soop: '숲', chzzk: '치지직', cime: '씨미', youtube: '유튜브', twitch: '트위치', kick: '킥' };
 
   let snap = { tiles: [], fullscreen: false };
@@ -194,6 +276,9 @@
     document.querySelectorAll('#layout .btn').forEach((b) => b.classList.toggle('on', b.dataset.layout === s.layout));
     $('split').checked = s.splitSoop;
     $('chzzkHq').checked = s.chzzkHq;
+    $('restore').checked = s.restore;
+    $('notify').checked = s.notify;
+    renderGroups(s);
     $('quality').value = s.quality;
     $('count').textContent = s.tiles.length ? `방송 ${s.tiles.length}개` : '';
     $('empty').classList.toggle('hidden', s.tiles.length > 0);
@@ -241,6 +326,7 @@
 
   function openPanel() {
     closeSettings(false);
+    closeGroups(false);
     $('panel').classList.add('open');
     syncPanel();
   }
@@ -256,15 +342,33 @@
     $('gear').classList.remove('on');
     if (sync) syncPanel();
   }
+  function closeGroups(sync = true) {
+    $('groups').classList.remove('open');
+    $('groupBtn').classList.remove('on');
+    if (sync) syncPanel();
+  }
   function closeAll() {
     if ($('panel').classList.contains('open')) closePanel(false);
     if ($('settings').classList.contains('open')) closeSettings();
+    if ($('groups').classList.contains('open')) closeGroups();
+  }
+  function openSettings() {
+    if ($('panel').classList.contains('open')) closePanel(false);
+    closeGroups(false);
+    $('settings').classList.add('open');
+    $('gear').classList.add('on');
+    syncPanel();
   }
   $('gear').addEventListener('click', () => {
     if ($('settings').classList.contains('open')) return closeSettings();
+    openSettings();
+  });
+  $('groupBtn').addEventListener('click', () => {
+    if ($('groups').classList.contains('open')) return closeGroups();
     if ($('panel').classList.contains('open')) closePanel(false);
-    $('settings').classList.add('open');
-    $('gear').classList.add('on');
+    closeSettings(false);
+    $('groups').classList.add('open');
+    $('groupBtn').classList.add('on');
     syncPanel();
   });
   // 패널을 검색창 아래에 맞추고, 앱에 패널 영역을 알려 그 부분만 방송 위에 겹쳐 보이게 한다.
@@ -275,6 +379,14 @@
       if (st.classList.contains('open')) {
         const r = st.getBoundingClientRect();
         return call('set_panel', { x: r.left, width: r.width, height: r.height });
+      }
+      const gr = $('groups');
+      if (gr.classList.contains('open')) {
+        // 그룹 버튼 오른쪽 끝에 맞추되 창 밖으로 나가지 않게 한다.
+        const b = $('groupBtn').getBoundingClientRect();
+        const left = Math.max(10, Math.min(b.right - gr.offsetWidth, innerWidth - gr.offsetWidth - 10));
+        gr.style.left = `${left}px`;
+        return call('set_panel', { x: left, width: gr.offsetWidth, height: gr.offsetHeight });
       }
       if (!p.classList.contains('open')) return call('set_panel', { x: 0, width: 0, height: 0 });
       const f = $('add').getBoundingClientRect();
@@ -287,7 +399,11 @@
   addEventListener('resize', syncPanel);
   // 방송을 누르는 등 다른 곳으로 포커스가 옮겨 가면 결과·설정을 닫는다.
   addEventListener('blur', closeAll);
-  addEventListener('keydown', (e) => { if (e.key === 'Escape' && $('settings').classList.contains('open')) closeSettings(); });
+  addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    if ($('settings').classList.contains('open')) closeSettings();
+    if ($('groups').classList.contains('open')) closeGroups();
+  });
 
   function status(text) {
     $('panel').innerHTML = `<div class="status"></div>`;
@@ -396,7 +512,150 @@
   $('split').addEventListener('change', (e) => call('set_split_soop', { on: e.target.checked }));
   $('chzzkHq').addEventListener('change', (e) => call('set_chzzk_hq', { on: e.target.checked }));
   $('quality').addEventListener('change', (e) => call('set_quality', { quality: e.target.value }));
+  $('restore').addEventListener('change', (e) => call('set_restore', { on: e.target.checked }));
+  $('notify').addEventListener('change', (e) => call('set_notify', { on: e.target.checked }));
   $('fs').addEventListener('click', () => call('command', { cmd: 'fullscreen' }));
+
+  // ---------- 그룹 ----------
+  // 지금 보는 방송들을 이름 붙여 저장해 두고, 열기(지금 방송을 닫고 그룹만) 또는 더하기(지금 방송에 덧붙이기)로 연다.
+  const tileName = (t) => t.name || t.input.replace(/^\w+:/, '');
+  // 마우스를 올렸을 때 보이는 글자: "2개 · 감스트(숲), 김민교.(숲)"
+  function groupSummary(g) {
+    return `${g.tiles.length}개 · ${g.tiles.map((t) => `${tileName(t)}(${PF[t.platform]})`).join(', ')}`;
+  }
+  // 그룹 목록에 보이는 줄: 방송마다 플랫폼 색 배지 + 이름
+  function groupLine(g) {
+    const line = Object.assign(document.createElement('span'), { className: 'gtiles', title: groupSummary(g) });
+    line.append(`${g.tiles.length}개 · `);
+    g.tiles.forEach((t, i) => {
+      if (i) line.append(', ');
+      const pf = Object.assign(document.createElement('span'), { className: 'pf', textContent: PF[t.platform] });
+      pf.style.background = `var(--${t.platform})`;
+      if (t.platform === 'kick' || t.platform === 'chzzk') pf.style.color = '#000';
+      line.append(pf, tileName(t));
+    });
+    return line;
+  }
+  async function openGroup(name, replace) {
+    closeAll();
+    await call('open_group', { name, replace });
+  }
+  function renderGroups(s) {
+    const list = $('glist');
+    const groups = s.groups || [];
+    // iconName을 주면 글자 앞에 아이콘을 붙인다.
+    const btn = (text, title, onClick, cls = '', iconName = null) => {
+      const b = Object.assign(document.createElement('button'), { className: `btn ${cls}`, type: 'button', title });
+      if (iconName) b.append(icon(iconName));
+      if (text) b.append(text);
+      b.addEventListener('click', onClick);
+      return b;
+    };
+    if (!groups.length) {
+      list.replaceChildren(Object.assign(document.createElement('div'), {
+        className: 'gempty',
+        textContent: '저장한 그룹이 없어요. 보고 싶은 방송을 띄운 뒤 아래에 이름을 적고 저장하세요.',
+      }));
+    } else {
+      list.replaceChildren(...groups.map((g) => {
+        const row = document.createElement('div');
+        row.className = 'grow';
+        const info = document.createElement('div');
+        info.className = 'gname';
+        info.append(Object.assign(document.createElement('b'), { textContent: g.name }),
+          groupLine(g));
+        const open = btn('열기', '지금 보는 방송을 닫고 이 그룹을 엽니다', () => openGroup(g.name, true), 'primary');
+        const add = btn('더하기', '지금 보는 방송은 두고 이 그룹 방송을 더합니다', () => openGroup(g.name, false));
+        // 실수로 지우지 않게 한 번 더 눌러야 지운다.
+        const del = btn('', '그룹 지우기', () => {
+          if (!del.classList.contains('armed')) {
+            del.classList.add('armed');
+            del.textContent = '지우기?';
+            setTimeout(() => { del.classList.remove('armed'); del.replaceChildren(icon('close')); }, 3000);
+            return;
+          }
+          call('delete_group', { name: g.name });
+        }, 'del', 'close');
+        row.append(info, open, add, del);
+        return row;
+      }));
+    }
+    // 방송이 없을 때 첫 화면에서도 그룹을 바로 열 수 있게 한다.
+    const w = $('wgroups');
+    w.classList.toggle('hidden', !groups.length);
+    w.replaceChildren(...groups.map((g) => btn(g.name, groupSummary(g), () => openGroup(g.name, true), '', 'folder')));
+    if ($('groups').classList.contains('open')) syncPanel();
+  }
+  $('gsave').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const name = $('gname').value.trim();
+    if (!name) return $('gname').focus();
+    const exists = (snap.groups || []).some((g) => g.name === name);
+    try {
+      await invoke('save_group', { name });
+      $('gname').value = '';
+      toast(exists ? `'${name}' 그룹을 지금 방송으로 바꿨어요.` : `'${name}' 그룹을 저장했어요.`);
+    } catch (err) {
+      toast(String(err));
+    }
+  });
+
+  // ---------- 업데이트 ----------
+  let update = null;
+  function renderUpdate(message) {
+    const box = $('updBox');
+    box.hidden = !update && !message;
+    box.replaceChildren();
+    if (!update) {
+      if (message) box.textContent = message;
+      syncPanel();
+      return;
+    }
+    box.append('새 버전 ', Object.assign(document.createElement('b'), { textContent: `v${update.version}` }), '이 나왔어요.');
+    if (update.notes) box.append(Object.assign(document.createElement('div'), { className: 'notes', textContent: update.notes }));
+    const label = update.portable ? '다운로드 페이지 열기' : '지금 업데이트';
+    const go = Object.assign(document.createElement('button'), { className: 'btn primary', type: 'button', textContent: label });
+    go.addEventListener('click', async () => {
+      go.disabled = true;
+      go.textContent = update.portable ? '여는 중…' : '내려받는 중… (끝나면 다시 켜져요)';
+      try {
+        await invoke('install_update');
+      } catch (err) {
+        toast(String(err));
+      }
+      go.disabled = false;
+      go.textContent = label;
+    });
+    const acts = document.createElement('div');
+    acts.className = 'acts';
+    acts.append(go);
+    box.append(acts);
+    syncPanel();
+  }
+  async function checkUpdate(manual) {
+    if (manual) {
+      $('checkUpd').disabled = true;
+      $('checkUpd').textContent = '확인 중…';
+    }
+    try {
+      update = await invoke('check_update');
+      $('updBtn').classList.toggle('hidden', !update);
+      if (update) $('updBtn').title = `새 버전 v${update.version}이 있어요`;
+      if (manual || update) renderUpdate(update ? null : '지금 최신 버전을 쓰고 있어요.');
+    } catch (err) {
+      // 자동 확인 실패(인터넷이 잠깐 끊긴 경우 등)는 알리지 않고, 직접 누른 경우만 알린다.
+      if (manual) renderUpdate(String(err));
+    }
+    if (manual) {
+      $('checkUpd').disabled = false;
+      $('checkUpd').textContent = '업데이트 확인';
+    }
+  }
+  $('checkUpd').addEventListener('click', () => checkUpdate(true));
+  $('updBtn').addEventListener('click', openSettings);
+  // 켜자마자 방송을 여느라 바쁠 때를 피해 조금 뒤에 확인하고, 오래 켜 두는 경우를 위해 6시간마다 다시 확인한다.
+  setTimeout(() => checkUpdate(false), 8000);
+  setInterval(() => checkUpdate(false), 6 * 60 * 60 * 1000);
   // 메일 앱이 없는 PC가 많아 주소 복사를 먼저 보여 주고, 메일 앱 열기는 따로 고르게 한다.
   $('report').addEventListener('click', () => {
     $('reportBox').classList.toggle('open');
@@ -429,6 +688,7 @@
     switch (e.code) {
       case 'Tab': return [e.shiftKey ? 'prev' : 'next'];
       case 'KeyM': return ['mute'];
+      case 'KeyA': return ['mix'];
       case 'KeyQ': return ['quality'];
       case 'KeyF': return ['layout'];
       case 'F11': return ['fullscreen'];

@@ -14,7 +14,7 @@
   };
 
   // ---------- 상태 ----------
-  let st = { index: 0, total: 0, selected: false, muted: false, chat: false, detached: false, videoOnly: true, fullscreen: false, quality: 'best', zoom: 1, dragging: false, dropTarget: false, offline: false, image: null };
+  let st = { index: 0, total: 0, selected: false, muted: false, chat: false, detached: false, videoOnly: true, fullscreen: false, quality: 'best', zoom: 1, dragging: false, dropTarget: false, offline: false, image: null, nick: null, volume: 100, mix: false, audible: false };
   let meta = { name: '', title: '' };
 
   // ---------- 화면 ----------
@@ -31,6 +31,7 @@
     video: [['rect', { x: '3', y: '5', width: '18', height: '14', rx: '2', ...STROKE }], ['path', { d: 'm10 9 5 3-5 3z' }]],
     reload: [['path', { d: 'M20 12a8 8 0 1 1-2.3-5.7M20 4v5h-5', ...STROKE }]],
     close: [['path', { d: 'm6 6 12 12M18 6 6 18', ...STROKE }]],
+    check: [['path', { d: 'm5 12 5 5 9-10', ...STROKE }]],
   };
   function svg(name) {
     const s = document.createElementNS(SVG_NS, 'svg');
@@ -107,6 +108,19 @@
   button.on { color: #a5b4fc; }
   button.x:hover { background: rgba(239,68,68,.85); }
   button.q { width: auto; padding: 0 8px; font: 700 11px/30px system-ui; letter-spacing: .02em; }
+  .vol { position: relative; }
+  .volpop { position: absolute; top: 30px; right: -48px; display: none; flex-direction: column; gap: 8px; width: 170px; padding: 10px 12px;
+    border-radius: 10px; background: rgba(16,16,22,.94); border: 1px solid rgba(255,255,255,.12); box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+  /* 버튼과 창 사이 빈틈에서 마우스가 빠져도 닫히지 않게 위쪽에 투명한 다리를 둔다 */
+  .volpop::before { content: ''; position: absolute; left: 0; right: 0; top: -8px; height: 8px; }
+  .vol:hover .volpop, .volpop.hold { display: flex; }
+  .volrow { display: flex; align-items: center; gap: 8px; font: 600 12px/1 system-ui; color: rgba(255,255,255,.8); }
+  .volrow input { flex: 1; min-width: 0; margin: 0; accent-color: #818cf8; cursor: pointer; }
+  .volrow .pct { width: 32px; text-align: right; font-variant-numeric: tabular-nums; }
+  button.mixbtn { width: auto; height: 28px; padding: 0 10px; border-radius: 7px; display: flex; align-items: center; gap: 5px; justify-content: start; font: 600 12px/28px "Pretendard", "Malgun Gothic", system-ui, sans-serif;
+    background: rgba(255,255,255,.08); }
+  button.mixbtn.on { background: rgba(99,102,241,.85); color: #fff; }
+  button.mixbtn svg { width: 14px; height: 14px; }
   .help { position: fixed; inset: 0; display: none; place-items: center; background: rgba(0,0,0,.6); pointer-events: auto; }
   .help.show { display: grid; }
   .card { background: #16161b; color: #e8e8ee; border: 1px solid #2a2a33; border-radius: 12px; padding: 16px 20px; max-width: 92%; max-height: 92%; overflow: auto; }
@@ -120,6 +134,7 @@
     [['1', '~', '9'], '방송 선택 (소리 켜기)'],
     [['Tab', '/', 'Shift+Tab'], '다음 / 이전 방송 선택'],
     [['M'], '음소거 켜기/끄기'],
+    [['A'], '같이 듣기 (선택하지 않아도 소리 내기)'],
     [['Q'], '화질 바꾸기 (최고 → 자동 → 저화질)'],
     [['F'], '선택한 방송 크게 보기 (포커스 / 격자)'],
     [['F11'], '전체 화면'],
@@ -153,12 +168,18 @@
     return b;
   };
   const audioBtn = btn('audio', '', 'mute');
+  // 스피커에 마우스를 올리면 이 방송 음량과 "같이 듣기"를 고르는 작은 창이 뜬다.
+  const volRange = el('input', { type: 'range', min: '0', max: '100', step: '5', title: '이 방송 음량' });
+  const volPct = el('span.pct');
+  const mixBtn = el('button.mixbtn', { 'data-cmd': 'mix', title: '선택한 방송이 아니어도 이 방송 소리를 같이 듣습니다 (A)' });
+  const volPop = el('div.volpop', null, el('div.volrow', null, volRange, volPct), mixBtn);
+  const volBox = el('div.vol', null, audioBtn, volPop);
   const chatBtn = btn('chat', '채팅 (C)', 'chat');
   const detachBtn = btn('detach', '', 'detach');
   const siteBtn = btn('siteview', '', 'site');
   const qualityBtn = btn('quality', '', null, 'q');
   const bar = el('div.bar', null, idx, meta_,
-    el('div.btns', null, qualityBtn, audioBtn, chatBtn, detachBtn, siteBtn, btn('reload', '새로고침 (R)', 'reload'), btn('close', '닫기 (Delete)', 'close', 'x')));
+    el('div.btns', null, qualityBtn, volBox, chatBtn, detachBtn, siteBtn, btn('reload', '새로고침 (R)', 'reload'), btn('close', '닫기 (Delete)', 'close', 'x')));
   const helpRows = HELP.map(([keys, desc]) => {
     const k = el('div.keys');
     for (const key of keys) k.append(key === '/' || key === '~' ? ` ${key} ` : el('kbd', null, key));
@@ -179,6 +200,21 @@
   const noScroll = document.createElement('style');
   root.append(style, off, frame, bar, drop, help);
 
+  // 방송 종료 화면 뒤에서 사이트가 다른 영상(다시보기·추천 영상 등)을 틀어도 소리가 나지 않게 멈춰 둔다.
+  // 방송이 다시 켜지면 앱이 페이지를 새로 열기 때문에 여기서 되돌릴 필요는 없다.
+  let silentTimer = 0;
+  function keepSilent(on) {
+    clearInterval(silentTimer);
+    silentTimer = 0;
+    if (!on) return;
+    const stop = () => document.querySelectorAll('video, audio').forEach((m) => {
+      m.muted = true;
+      if (!m.paused) m.pause();
+    });
+    stop();
+    silentTimer = setInterval(stop, 1000);
+  }
+
   function render() {
     // 앱이 페이지 확대 비율을 낮춘 경우(좁은 킥 타일) 오버레이만 되돌려 원래 크기로 보이게 한다.
     host.style.zoom = String(1 / (st.zoom || 1));
@@ -189,12 +225,15 @@
     drop.classList.toggle('on', st.dropTarget);
     off.classList.toggle('on', st.offline);
     window.__mvOffline = st.offline;
+    keepSilent(st.offline);
     // 종료 화면 옆으로 사이트 스크롤바가 보이지 않게 한다.
     noScroll.textContent = st.offline ? 'html, body { overflow: hidden !important; }' : '';
     if (!noScroll.isConnected && document.head) document.head.appendChild(noScroll);
-    offName.textContent = meta.name || PLATFORM.name;
+    // 꺼진 방송은 페이지에 이름이 없거나 아이디만 있어서, 앱이 플랫폼에서 읽어 온 이름을 먼저 쓴다.
+    const offline = st.nick || meta.name || PLATFORM.name;
+    offName.textContent = offline;
     // 사진이 없거나 못 불러오면 이름 첫 글자를 보여 주고, 다음에 다시 시도한다.
-    const initial = () => avatar.replaceChildren((meta.name || PLATFORM.name || '?').slice(0, 1));
+    const initial = () => avatar.replaceChildren((offline || '?').slice(0, 1));
     if (st.image && avatarSrc !== st.image) {
       avatarSrc = st.image;
       const img = el('img', { alt: '', referrerpolicy: 'no-referrer' });
@@ -203,12 +242,17 @@
       avatar.replaceChildren(img);
     } else if (!avatar.querySelector('img')) initial();
     pf.style.background = PLATFORM.color;
-    nm.textContent = meta.name || PLATFORM.name || location.hostname;
+    nm.textContent = (st.offline ? st.nick || meta.name : meta.name || st.nick) || PLATFORM.name || location.hostname;
     titleEl.textContent = meta.title || '';
-    const audible = st.selected && !st.muted;
+    const audible = st.audible;
     setIcon(audioBtn, audible ? 'volume' : 'mute');
     audioBtn.classList.toggle('on', audible);
-    audioBtn.title = audible ? '음소거 (M)' : `이 방송 소리 켜기 (${st.index || '숫자'})`;
+    audioBtn.title = st.selected && !st.muted ? '음소거 (M)' : `이 방송 소리 켜기 (${st.index || '숫자'})`;
+    // 끄는 중에는 앱이 보낸 값으로 되돌리지 않는다.
+    if (root.activeElement !== volRange) volRange.value = String(st.volume);
+    volPct.textContent = `${volRange.value}%`;
+    mixBtn.replaceChildren(...(st.mix ? [svg('check'), '같이 듣는 중'] : ['같이 듣기']));
+    mixBtn.classList.toggle('on', st.mix);
     chatBtn.classList.toggle('on', st.chat);
     setIcon(detachBtn, st.detached ? 'attach' : 'detach');
     detachBtn.title = st.detached ? '메인 창으로 합치기 (D)' : '새 창으로 분리 (D)';
@@ -260,6 +304,20 @@
   root.addEventListener('pointerup', (e) => endDrag(e, false));
   root.addEventListener('pointercancel', (e) => endDrag(e, true));
 
+  // 음량 막대: 끄는 동안 화면 프레임마다 한 번만 앱에 보낸다.
+  let volFrame = 0;
+  volRange.addEventListener('input', () => {
+    volPct.textContent = `${volRange.value}%`;
+    cancelAnimationFrame(volFrame);
+    volFrame = requestAnimationFrame(() => send('volume', Number(volRange.value), true));
+  });
+  // 막대를 끄는 동안 마우스가 창 밖으로 나가도 창을 닫지 않는다.
+  volRange.addEventListener('pointerdown', () => volPop.classList.add('hold'));
+  addEventListener('pointerup', () => {
+    volPop.classList.remove('hold');
+    volRange.blur();
+  }, true);
+
   root.addEventListener('click', (e) => {
     if (justDragged) return;
     const b = e.target.closest('button');
@@ -305,6 +363,7 @@
     switch (e.code) {
       case 'Tab': return [e.shiftKey ? 'prev' : 'next'];
       case 'KeyM': return ['mute'];
+      case 'KeyA': return ['mix'];
       case 'KeyQ': return ['quality'];
       case 'KeyF': return ['layout'];
       case 'F11': return ['fullscreen'];
@@ -329,6 +388,49 @@
     if (k[0] === 'help') help.classList.toggle('show');
     else send(k[0], k[1] || 0);
   }, true);
+
+  // ---------- 음량 ----------
+  // 방송별 음량은 앱이 기억하고, 페이지의 영상 음량과 서로 맞춘다.
+  // - 앱에서 바꾸면 영상 음량을 바꾼다. 영상 음량 변화를 보는 사이트 음량 막대는 따라 움직이고, 유튜브는 플레이어에 직접 알린다.
+  // - 사용자가 사이트 음량 막대·키로 바꾸면 그 값을 앱에 알린다.
+  // - 사이트가 스스로 바꾼 음량(저장해 둔 음량을 페이지를 열 때 적용하는 등)은 앱 값으로 되돌린다.
+  //   숲·치지직은 음량을 사이트에 하나만 저장해서, 그대로 두면 같은 플랫폼 방송끼리 음량이 섞인다.
+  let volume = 100;
+  // 앱이 이 방송 음량을 알려 주기 전에는 페이지 음량을 건드리지도, 앱에 알리지도 않는다.
+  let volumeKnown = false;
+  let lastInput = 0;
+  for (const type of ['pointerdown', 'pointerup', 'wheel', 'keydown']) addEventListener(type, () => (lastInput = Date.now()), true);
+  const userJustActed = () => Date.now() - lastInput < 1500;
+  const same = (v) => Math.abs(v.volume - volume / 100) < 0.005;
+  const applyVolume = () => {
+    if (!volumeKnown) return;
+    const yt = document.querySelector('#movie_player');
+    if (typeof yt?.setVolume === 'function' && yt.getVolume?.() !== volume) yt.setVolume(volume);
+    // 숲 플레이어 막대는 영상 음량 변화를 보지 않아서, 사용자가 막대를 움직일 때 쓰는 함수를 직접 부른다.
+    const soop = Object.values(window.liveView?.aContainer || {}).find((c) => typeof c?.setVolumeUI === 'function' && typeof c.volume === 'function');
+    if (soop && Math.abs((soop.nCurrentVolume ?? -1) - volume / 100) > 0.005) soop.volume(volume / 100);
+    for (const v of document.querySelectorAll('video')) {
+      if (!same(v)) v.volume = volume / 100;
+    }
+  };
+  window.__mvSetVolume = (v) => {
+    volume = Math.max(0, Math.min(100, Math.round(Number(v) || 0)));
+    volumeKnown = true;
+    applyVolume();
+  };
+  let reportFrame = 0;
+  document.addEventListener('volumechange', (e) => {
+    const v = e.target;
+    if (!volumeKnown || !(v instanceof HTMLVideoElement) || same(v)) return;
+    if (!userJustActed()) return applyVolume();
+    // 막대를 끄는 동안 이벤트가 많이 오므로 화면 프레임마다 한 번만 알린다.
+    volume = Math.round(v.volume * 100);
+    cancelAnimationFrame(reportFrame);
+    reportFrame = requestAnimationFrame(() => send('volume', volume, true));
+  }, true);
+  // 플레이어가 영상을 새로 붙이거나 다시 재생하면 음량이 돌아가므로 그때마다 다시 맞춘다.
+  document.addEventListener('play', applyVolume, true);
+  document.addEventListener('loadeddata', applyVolume, true);
 
   // ---------- 방송인·제목 ----------
   const text = (sel) => (document.querySelector(sel)?.textContent || '').trim();

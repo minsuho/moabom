@@ -10,6 +10,7 @@ use tauri::{
 };
 
 use crate::platforms::{self, Platform};
+use crate::store::{self, Group, Saved, SavedTile};
 
 pub const MAIN: &str = "main";
 pub const UI: &str = "ui";
@@ -78,6 +79,16 @@ pub struct Tile {
     /// 방송인 프로필 사진(종료 화면에 쓴다)
     #[serde(skip)]
     image: Option<String>,
+    /// 방송을 열 때 입력한 값. 다시 열 때(마지막 방송·그룹) 이 값을 다시 해석한다.
+    #[serde(skip)]
+    input: String,
+    /// 플랫폼 API에서 읽은 방송인 이름. 꺼진 방송은 페이지에서 이름을 읽을 수 없어 이걸 쓴다.
+    #[serde(skip)]
+    nick: Option<String>,
+    /// 이 방송의 음량(0~100). 페이지의 영상 음량을 바꾼다.
+    volume: u8,
+    /// 선택하지 않아도 소리를 같이 낸다.
+    mix: bool,
 }
 
 /// 화질 모드. 플랫폼별 적용은 inject/quality.js가 맡는다.
@@ -110,11 +121,14 @@ impl Quality {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Layout {
     Grid,
+    /// 선택한 방송을 크게, 나머지는 오른쪽 세로 줄로
     Focus,
+    /// 선택한 방송을 크게, 나머지는 아래 가로 줄로
+    Bottom,
 }
 
 #[derive(Clone, Serialize)]
@@ -129,6 +143,9 @@ pub struct Snapshot {
     split_soop: bool,
     chzzk_hq: bool,
     quality: Quality,
+    restore: bool,
+    notify: bool,
+    groups: Vec<Group>,
 }
 
 pub struct Tiles(Mutex<Inner>);
@@ -154,6 +171,13 @@ struct Inner {
     chzzk_hq: bool,
     /// 모든 방송에 적용하는 기본 화질(방송별로 따로 정할 수 있다)
     quality: Quality,
+    /// F 키로 격자에서 바꿀 때 쓸 크게 보기 배치(마지막으로 고른 것)
+    big_layout: Layout,
+    restore: bool,
+    notify: bool,
+    groups: Vec<Group>,
+    /// 마지막 방송을 다시 여는 중. 다 열기 전에는 저장하지 않는다(중간에 꺼지면 목록이 줄어든다).
+    restoring: bool,
 }
 
 impl Default for Tiles {
@@ -172,6 +196,11 @@ impl Default for Tiles {
             split_soop: true,
             chzzk_hq: true,
             quality: Quality::Auto,
+            big_layout: Layout::Focus,
+            restore: true,
+            notify: true,
+            groups: Vec::new(),
+            restoring: false,
         }))
     }
 }
@@ -188,7 +217,43 @@ impl Inner {
             split_soop: self.split_soop,
             chzzk_hq: self.chzzk_hq,
             quality: self.quality,
+            restore: self.restore,
+            notify: self.notify,
+            groups: self.groups.clone(),
         }
+    }
+
+    fn saved_tiles(&self) -> Vec<SavedTile> {
+        self.tiles
+            .iter()
+            .map(|t| SavedTile {
+                input: t.input.clone(),
+                platform: t.platform,
+                name: t.name.clone().or_else(|| t.nick.clone()),
+                quality: t.quality,
+                volume: t.volume,
+                mix: t.mix,
+            })
+            .collect()
+    }
+
+    fn saved(&self) -> Saved {
+        Saved {
+            restore: self.restore,
+            notify: self.notify,
+            layout: self.layout,
+            quality: self.quality,
+            split_soop: self.split_soop,
+            chzzk_hq: self.chzzk_hq,
+            tiles: self.saved_tiles(),
+            selected: self.tiles.iter().position(|t| Some(t.id) == self.selected),
+            groups: self.groups.clone(),
+        }
+    }
+
+    /// 실제로 소리를 내는 방송인지: 전체 음소거가 아니고, 선택했거나 같이 듣기를 켠 방송.
+    fn audible(&self, t: &Tile) -> bool {
+        !self.muted && (self.selected == Some(t.id) || t.mix)
     }
 
     fn get(&self, id: u32) -> Result<&Tile, String> {
@@ -277,6 +342,8 @@ fn build_webview(
     }
     let mut b = b
         .background_color(Color(0, 0, 0, 255))
+        // 숲은 방송이 끝나면 다시보기(VOD) 페이지로 넘어가 자동 재생한다. 종료 화면 뒤에서 소리가 나므로 막는다.
+        .on_navigation(|url| !is_vod_autoplay(url))
         .on_new_window({
             let app = app.clone();
             let opener = label.to_string();
@@ -295,6 +362,12 @@ fn build_webview(
         };
     }
     Ok(b)
+}
+
+/// 방송이 끝났을 때 숲이 이동시키는 다시보기 자동 재생 주소인지.
+fn is_vod_autoplay(url: &Url) -> bool {
+    url.host_str().is_some_and(|h| h.starts_with("vod.sooplive") || h.starts_with("vod.afreecatv"))
+        && url.query_pairs().any(|(k, _)| k == "autoplay_from_live")
 }
 
 /// 번들에 포함된 확장 폴더(하위 폴더 하나가 확장 하나). 개발 중에는 빌드가 target 폴더로 복사해 둔다.
@@ -380,6 +453,7 @@ fn restore_page_state(wv: &Webview) {
     }
     let quality = state.0.lock().unwrap().quality_of(&tile);
     let _ = wv.eval(format!("window.__mvSetQuality && window.__mvSetQuality('{}')", quality.as_str()));
+    let _ = wv.eval(format!("window.__mvSetVolume && window.__mvSetVolume({})", tile.volume));
     push_overlay(app);
 }
 
@@ -389,9 +463,17 @@ fn host_window(app: &AppHandle, tile: &Tile) -> Result<Window, String> {
     app.get_window(&label).ok_or_else(|| "창을 찾을 수 없습니다".to_string())
 }
 
+/// 상태가 바뀔 때마다 부른다. 컨트롤 바에 알리고 설정 파일에도 저장한다.
 fn emit(app: &AppHandle) {
-    let snap = app.state::<Tiles>().0.lock().unwrap().snapshot();
+    let (snap, saved) = {
+        let state = app.state::<Tiles>();
+        let g = state.0.lock().unwrap();
+        (g.snapshot(), (!g.restoring).then(|| g.saved()))
+    };
     let _ = app.emit_to(UI, "tiles", snap);
+    if let Some(saved) = saved {
+        store::save(app, &saved);
+    }
 }
 
 fn toast(app: &AppHandle, msg: &str) {
@@ -428,6 +510,10 @@ fn push_overlay(app: &AppHandle) {
                     "quality": g.quality_of(t).as_str(),
                     "offline": t.live == Some(false),
                     "image": t.image,
+                    "nick": t.nick,
+                    "volume": t.volume,
+                    "mix": t.mix,
+                    "audible": g.audible(t),
                     "dragging": g.drag.is_some_and(|(src, _)| src == t.id),
                     "dropTarget": g.drag.is_some_and(|(_, dst)| dst == Some(t.id)),
                 });
@@ -551,7 +637,9 @@ fn set_meta(app: &AppHandle, id: u32, data: &serde_json::Value) {
         let state = app.state::<Tiles>();
         let mut g = state.0.lock().unwrap();
         let Ok(t) = g.get_mut(id) else { return };
-        t.name = clean(&data["name"]);
+        // 꺼진 숲 방송은 페이지 제목에 아이디만 있다. 그때는 플랫폼에서 읽은 이름(또는 저장해 둔 이름)을 그대로 둔다.
+        let name = clean(&data["name"]).filter(|n| !n.eq_ignore_ascii_case(&t.channel));
+        t.name = name.or_else(|| t.nick.clone()).or_else(|| t.name.take());
         t.title = clean(&data["title"]);
         t.detached.then(|| (t.name.clone().unwrap_or_else(|| t.channel.clone()), t.title.clone()))
     };
@@ -589,12 +677,12 @@ fn set_muted(wv: &Webview, muted: bool) {
     ));
 }
 
-/// 선택한 타일만 소리를 낸다. 사이트 볼륨과 상관없이 웹뷰 단위로 막는다.
+/// 선택한 타일(과 같이 듣기를 켠 타일)만 소리를 낸다. 사이트 볼륨과 상관없이 웹뷰 단위로 막는다.
 fn apply_audio(app: &AppHandle) {
     let mutes: Vec<(u32, bool)> = {
         let state = app.state::<Tiles>();
         let g = state.0.lock().unwrap();
-        g.tiles.iter().map(|t| (t.id, g.muted || g.selected != Some(t.id))).collect()
+        g.tiles.iter().map(|t| (t.id, !g.audible(t))).collect()
     };
     for (id, muted) in mutes {
         if let Some(wv) = app.get_webview(&tile_label(id)) {
@@ -650,6 +738,28 @@ fn focus(a: Rect, n: usize, main_idx: usize) -> Vec<Rect> {
                 main
             } else {
                 let r = Rect { x: a.x + main.w, y: a.y + k as f64 * side_h, w: side_w, h: side_h };
+                k += 1;
+                r
+            }
+        })
+        .collect()
+}
+
+/// 아래 줄 모드: 주 화면 하나를 위에 크게, 나머지는 아래 가로 줄로.
+fn bottom(a: Rect, n: usize, main_idx: usize) -> Vec<Rect> {
+    if n <= 1 {
+        return grid(a, n);
+    }
+    let strip_h = (a.h * 0.25).max(120.0).min(a.h * 0.5);
+    let main = Rect { h: a.h - strip_h, ..a };
+    let side_w = a.w / (n - 1) as f64;
+    let mut k = 0;
+    (0..n)
+        .map(|i| {
+            if i == main_idx {
+                main
+            } else {
+                let r = Rect { x: a.x + k as f64 * side_w, y: a.y + main.h, w: side_w, h: strip_h };
                 k += 1;
                 r
             }
@@ -801,9 +911,13 @@ pub fn relayout(app: &AppHandle) {
         let area = Rect { x: 0.0, y: top, w: (w - dock).max(1.0), h: (h - top).max(1.0) };
         let rects = match g.layout {
             Layout::Grid => grid(area, attached.len()),
-            Layout::Focus => {
+            Layout::Focus | Layout::Bottom => {
                 let main_idx = attached.iter().position(|t| Some(t.id) == g.selected).unwrap_or(0);
-                focus(area, attached.len(), main_idx)
+                if g.layout == Layout::Focus {
+                    focus(area, attached.len(), main_idx)
+                } else {
+                    bottom(area, attached.len(), main_idx)
+                }
             }
         };
         for (t, r) in attached.iter().zip(rects) {
@@ -1187,19 +1301,36 @@ async fn check_live(app: &AppHandle, id: u32) {
         return;
     };
     let Some(status) = crate::live::check(platform, &channel).await else { return };
-    let (changed, came_back) = {
+    let (changed, came_back, notify) = {
         let state = app.state::<Tiles>();
         let mut g = state.0.lock().unwrap();
+        let notify = g.notify;
         let Ok(t) = g.get_mut(id) else { return };
         let before = t.live;
         t.live = Some(status.live);
         if status.image.is_some() {
             t.image = status.image;
         }
-        (before != t.live, before == Some(false) && status.live)
+        let nick_changed = status.name.is_some() && t.nick != status.name;
+        if nick_changed {
+            t.nick = status.name;
+            if t.name.as_deref().is_none_or(|n| n.eq_ignore_ascii_case(&t.channel)) {
+                t.name = t.nick.clone();
+            }
+        }
+        let came_back = before == Some(false) && status.live;
+        let name = t.name.clone().or_else(|| t.nick.clone()).unwrap_or_else(|| t.channel.clone());
+        (before != t.live || nick_changed, came_back, (came_back && notify).then_some(name))
     };
     if came_back {
-        let _ = reload_tile(app, id);
+        // 꺼져 있는 동안 페이지가 다른 곳으로 갔을 수 있어 새로고침이 아니라 방송 주소로 다시 이동한다.
+        let url = app.state::<Tiles>().0.lock().unwrap().get(id).ok().and_then(|t| t.url.parse().ok());
+        if let (Some(wv), Some(url)) = (app.get_webview(&tile_label(id)), url) {
+            let _ = wv.navigate(url);
+        }
+    }
+    if let Some(name) = notify {
+        notify_live(app, &name);
     }
     if changed {
         push_overlay(app);
@@ -1207,9 +1338,43 @@ async fn check_live(app: &AppHandle, id: u32) {
     }
 }
 
+/// 꺼져 있던 방송이 시작되면 Windows 알림을 띄운다.
+fn notify_live(app: &AppHandle, name: &str) {
+    crate::notify::show(app, &format!("{name} 방송이 시작됐어요"), "모아봄에서 자동으로 연결했어요.");
+}
+
 fn reload_tile(app: &AppHandle, id: u32) -> Result<(), String> {
     let wv = app.get_webview(&tile_label(id)).ok_or("타일이 없습니다")?;
     wv.eval("location.reload()").map_err(err)
+}
+
+/// 이 방송 음량을 바꾼다(0~100). 소리를 낼지는 선택·같이 듣기가 정한다.
+fn set_volume(app: &AppHandle, id: u32, volume: i64) {
+    let volume = volume.clamp(0, 100) as u8;
+    if let Ok(t) = app.state::<Tiles>().0.lock().unwrap().get_mut(id) {
+        t.volume = volume;
+    }
+    if let Some(wv) = app.get_webview(&tile_label(id)) {
+        let _ = wv.eval(format!("window.__mvSetVolume && window.__mvSetVolume({volume})"));
+    }
+    push_overlay(app);
+    emit(app);
+}
+
+/// 같이 듣기: 선택한 방송이 아니어도 이 방송 소리를 함께 낸다(합방을 볼 때).
+fn toggle_mix(app: &AppHandle, id: u32) -> Result<(), String> {
+    {
+        let state = app.state::<Tiles>();
+        let mut g = state.0.lock().unwrap();
+        let t = g.get_mut(id)?;
+        t.mix = !t.mix;
+        // 같이 듣기를 켰는데 전체 음소거 중이면 들리지 않으므로 음소거를 푼다.
+        if t.mix {
+            g.muted = false;
+        }
+    }
+    refresh(app);
+    Ok(())
 }
 
 fn move_tile(app: &AppHandle, id: u32, delta: i64) {
@@ -1309,7 +1474,7 @@ async fn run_command(
             {
                 let state = app.state::<Tiles>();
                 let mut g = state.0.lock().unwrap();
-                g.layout = if g.layout == Layout::Grid { Layout::Focus } else { Layout::Grid };
+                g.layout = if g.layout == Layout::Grid { g.big_layout } else { Layout::Grid };
                 if g.selected.is_none() {
                     g.selected = id;
                 }
@@ -1343,6 +1508,8 @@ async fn run_command(
                 "close" => remove_tile(&app, id).await?,
                 "move" => move_tile(&app, id, arg),
                 "quality" => cycle_quality(&app, id)?,
+                "volume" => set_volume(&app, id, arg),
+                "mix" => toggle_mix(&app, id)?,
                 _ => {}
             }
         }
@@ -1359,7 +1526,12 @@ pub fn list_tiles(state: tauri::State<'_, Tiles>) -> Snapshot {
 
 #[tauri::command]
 pub async fn add_tile(app: AppHandle, input: String) -> Result<(), String> {
-    let r = platforms::resolve(&input)?;
+    open_tile(&app, &input, None)
+}
+
+/// 방송을 연다. `saved`가 있으면 저장해 둔 이름·화질·음량·같이 듣기도 되살린다.
+fn open_tile(app: &AppHandle, input: &str, saved: Option<&SavedTile>) -> Result<(), String> {
+    let r = platforms::resolve(input)?;
     let (tile, scripts) = {
         let state = app.state::<Tiles>();
         let mut g = state.0.lock().unwrap();
@@ -1374,38 +1546,97 @@ pub async fn add_tile(app: AppHandle, input: String) -> Result<(), String> {
             detached: false,
             chat_open: false,
             video_only: true,
-            name: None,
+            // 저장해 둔 이름을 먼저 보여 주고, 페이지가 열리면 최신 이름으로 바뀐다.
+            name: saved.and_then(|s| s.name.clone()),
             title: None,
             popup_chat: false,
-            quality: None,
+            quality: saved.and_then(|s| s.quality),
             loaded: false,
             live: None,
             image: None,
+            input: input.trim().to_string(),
+            nick: None,
+            volume: saved.map_or(100, |s| s.volume.min(100)),
+            mix: saved.is_some_and(|s| s.mix),
         };
         g.tiles.push(tile.clone());
         if g.selected.is_none() {
             g.selected = Some(tile.id);
         }
-        let scripts = g.tile_scripts(tile.platform, g.quality);
+        let scripts = g.tile_scripts(tile.platform, g.quality_of(&tile));
         (tile, scripts)
     };
     let main = app.get_window(MAIN).ok_or("메인 창이 없습니다")?;
-    let builder = build_webview(&app, &tile_label(tile.id), &tile.url, &tile.profile, &scripts)?;
+    let builder = build_webview(app, &tile_label(tile.id), &tile.url, &tile.profile, &scripts)?;
     match main.add_child(builder, LogicalPosition::new(0.0, BAR_H), LogicalSize::new(1.0, 1.0)) {
         Ok(wv) => {
-            listen_messages(&app, &wv, tile.id);
-            watch_first_load(&app, tile.id);
+            listen_messages(app, &wv, tile.id);
+            watch_first_load(app, tile.id);
             let app = app.clone();
             tauri::async_runtime::spawn(async move { check_live(&app, tile.id).await });
         }
         Err(e) => {
             app.state::<Tiles>().0.lock().unwrap().tiles.retain(|t| t.id != tile.id);
-            emit(&app);
+            emit(app);
             return Err(err(e));
         }
     }
-    refresh(&app);
+    refresh(app);
     Ok(())
+}
+
+/// 저장한 방송들을 차례로 연다. 실패한 방송은 건너뛰고 몇 개가 안 열렸는지 돌려준다.
+fn open_saved(app: &AppHandle, tiles: &[SavedTile]) -> usize {
+    let mut failed = 0;
+    for s in tiles {
+        if let Err(e) = open_tile(app, &s.input, Some(s)) {
+            eprintln!("[moabom] {}: {e}", s.input);
+            failed += 1;
+        }
+    }
+    failed
+}
+
+/// 시작할 때 저장해 둔 설정을 적용하고, 켜 두었으면 마지막으로 보던 방송을 다시 연다.
+pub fn restore_session(app: &AppHandle, reopen_tiles: bool) {
+    let saved = store::load(app);
+    let reopen = {
+        let state = app.state::<Tiles>();
+        let mut g = state.0.lock().unwrap();
+        g.restore = saved.restore;
+        g.notify = saved.notify;
+        g.layout = saved.layout;
+        if saved.layout != Layout::Grid {
+            g.big_layout = saved.layout;
+        }
+        g.quality = saved.quality;
+        g.split_soop = saved.split_soop;
+        g.chzzk_hq = saved.chzzk_hq;
+        g.groups = saved.groups;
+        let reopen = reopen_tiles && saved.restore && !saved.tiles.is_empty();
+        g.restoring = reopen;
+        reopen.then_some((saved.tiles, saved.selected))
+    };
+    emit(app);
+    let Some((tiles, selected)) = reopen else { return };
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let failed = open_saved(&app, &tiles);
+        {
+            let state = app.state::<Tiles>();
+            let mut g = state.0.lock().unwrap();
+            // 열지 못한 방송이 있으면 순서가 어긋나므로 저장해 둔 입력값으로 찾는다.
+            let want = selected.and_then(|i| tiles.get(i)).map(|s| s.input.trim().to_string());
+            if let Some(id) = want.and_then(|w| g.tiles.iter().find(|t| t.input == w).map(|t| t.id)) {
+                g.selected = Some(id);
+            }
+            g.restoring = false;
+        }
+        refresh(&app);
+        if failed > 0 {
+            toast(&app, &format!("지난번 방송 중 {failed}개를 열지 못했습니다."));
+        }
+    });
 }
 
 /// 단축키나 컨트롤 바 버튼에서 오는 명령. 대상은 선택한 타일이다.
@@ -1416,7 +1647,14 @@ pub async fn command(app: AppHandle, cmd: String, arg: Option<i64>) -> Result<()
 
 #[tauri::command]
 pub async fn set_layout(app: AppHandle, layout: Layout) -> Result<(), String> {
-    app.state::<Tiles>().0.lock().unwrap().layout = layout;
+    {
+        let state = app.state::<Tiles>();
+        let mut g = state.0.lock().unwrap();
+        g.layout = layout;
+        if layout != Layout::Grid {
+            g.big_layout = layout;
+        }
+    }
     refresh(&app);
     Ok(())
 }
@@ -1480,6 +1718,75 @@ pub async fn set_chzzk_hq(app: AppHandle, on: bool) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub async fn set_restore(app: AppHandle, on: bool) -> Result<(), String> {
+    app.state::<Tiles>().0.lock().unwrap().restore = on;
+    emit(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn set_notify(app: AppHandle, on: bool) -> Result<(), String> {
+    app.state::<Tiles>().0.lock().unwrap().notify = on;
+    emit(&app);
+    Ok(())
+}
+
+/// 지금 보는 방송들을 그룹으로 저장한다. 같은 이름이 있으면 덮어쓴다.
+#[tauri::command]
+pub async fn save_group(app: AppHandle, name: String) -> Result<(), String> {
+    let name = name.trim().to_string();
+    if name.is_empty() {
+        return Err("그룹 이름을 입력하세요".into());
+    }
+    {
+        let state = app.state::<Tiles>();
+        let mut g = state.0.lock().unwrap();
+        if g.tiles.is_empty() {
+            return Err("저장할 방송이 없습니다. 방송을 먼저 추가하세요.".into());
+        }
+        let group = Group { name: name.clone(), tiles: g.saved_tiles() };
+        match g.groups.iter_mut().find(|x| x.name == name) {
+            Some(x) => *x = group,
+            None => g.groups.push(group),
+        }
+    }
+    emit(&app);
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_group(app: AppHandle, name: String) -> Result<(), String> {
+    app.state::<Tiles>().0.lock().unwrap().groups.retain(|x| x.name != name);
+    emit(&app);
+    Ok(())
+}
+
+/// 그룹을 연다. `replace`면 지금 보는 방송을 모두 닫고 그룹 방송만 연다.
+/// 아니면 이미 열려 있는 방송은 빼고 덧붙인다.
+#[tauri::command]
+pub async fn open_group(app: AppHandle, name: String, replace: bool) -> Result<(), String> {
+    let (group, open) = {
+        let state = app.state::<Tiles>();
+        let g = state.0.lock().unwrap();
+        let group = g.groups.iter().find(|x| x.name == name).cloned().ok_or("그룹이 없습니다")?;
+        (group, g.tiles.iter().map(|t| (t.id, t.input.clone())).collect::<Vec<_>>())
+    };
+    let todo: Vec<SavedTile> = if replace {
+        for (id, _) in &open {
+            remove_tile(&app, *id).await?;
+        }
+        group.tiles
+    } else {
+        group.tiles.into_iter().filter(|s| !open.iter().any(|(_, input)| *input == s.input.trim())).collect()
+    };
+    let failed = open_saved(&app, &todo);
+    if failed > 0 {
+        toast(&app, &format!("그룹 방송 중 {failed}개를 열지 못했습니다."));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1504,6 +1811,10 @@ mod tests {
             loaded: false,
             live: None,
             image: None,
+            input: String::new(),
+            nick: None,
+            volume: 100,
+            mix: false,
         }
     }
 
@@ -1559,6 +1870,58 @@ mod tests {
         assert_eq!(g.quality_of(&tile), Quality::Auto);
         tile.quality = Some(Quality::Low);
         assert_eq!(g.quality_of(&tile), Quality::Low);
+    }
+
+    #[test]
+    fn bottom_puts_others_in_a_row_below() {
+        let r = bottom(A, 3, 1);
+        assert_eq!((r[1].x, r[1].y, r[1].w), (0.0, 0.0, 1600.0));
+        assert_eq!((r[0].x, r[0].y, r[0].w), (0.0, r[1].h, 800.0));
+        assert_eq!((r[2].x, r[2].y), (800.0, r[1].h));
+        assert_eq!(r[1].h + r[0].h, 900.0);
+    }
+
+    #[test]
+    fn mix_tiles_are_audible_unless_muted() {
+        let t = Tiles::default();
+        let mut g = t.0.lock().unwrap();
+        g.tiles.push(tile(1, Platform::Soop, "default".into()));
+        g.tiles.push(tile(2, Platform::Chzzk, "default".into()));
+        g.selected = Some(1);
+        let (a, b) = (g.tiles[0].clone(), g.tiles[1].clone());
+        assert!(g.audible(&a));
+        assert!(!g.audible(&b));
+        g.tiles[1].mix = true;
+        let b = g.tiles[1].clone();
+        assert!(g.audible(&b));
+        g.muted = true;
+        assert!(!g.audible(&b));
+    }
+
+    #[test]
+    fn saved_keeps_order_and_selection() {
+        let t = Tiles::default();
+        let mut g = t.0.lock().unwrap();
+        let mut a = tile(1, Platform::Soop, "soop-1".into());
+        a.input = "soop:a".into();
+        let mut b = tile(2, Platform::Kick, "default".into());
+        b.input = "kick:b".into();
+        b.volume = 30;
+        g.tiles.extend([a, b]);
+        g.selected = Some(2);
+        let s = g.saved();
+        let inputs: Vec<_> = s.tiles.iter().map(|t| t.input.as_str()).collect();
+        assert_eq!(inputs, ["soop:a", "kick:b"]);
+        assert_eq!(s.selected, Some(1));
+        assert_eq!(s.tiles[1].volume, 30);
+    }
+
+    #[test]
+    fn blocks_only_soop_vod_autoplay() {
+        let u = |s: &str| Url::parse(s).unwrap();
+        assert!(is_vod_autoplay(&u("https://vod.sooplive.com/player/209904703/?autoplay_from_live=1&volume=1&muted=0")));
+        assert!(!is_vod_autoplay(&u("https://vod.sooplive.com/player/209904703")));
+        assert!(!is_vod_autoplay(&u("https://play.sooplive.com/layule")));
     }
 
     #[test]

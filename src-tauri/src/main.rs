@@ -1,9 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod live;
+mod notify;
 mod platforms;
 mod search;
+mod store;
 mod tiles;
+mod update;
 
 use tauri::{webview::Color, LogicalPosition, LogicalSize, Manager, Theme, WebviewBuilder, WebviewUrl, WindowEvent};
 
@@ -26,12 +29,17 @@ fn open_report(app: tauri::AppHandle) -> Result<(), String> {
          무엇을 했더니 어떻게 됐나요?\r\n\r\n\r\n(스크린샷이 있으면 첨부해 주세요)\r\n"
     );
     let url = format!("mailto:{REPORT_EMAIL}?subject={}&body={}", enc(&subject), enc(&body));
-    // cmd의 start는 &를 명령 구분자로 해석하므로, 셸을 거치지 않는 방식으로 연다.
+    open_url(&url).map_err(|e| format!("메일 앱을 열지 못했습니다: {e}"))
+}
+
+/// 주소를 기본 프로그램(브라우저, 메일 앱)으로 연다.
+/// cmd의 start는 &를 명령 구분자로 해석하므로, 셸을 거치지 않는 방식으로 연다.
+pub fn open_url(url: &str) -> Result<(), String> {
     std::process::Command::new("rundll32")
-        .args(["url.dll,FileProtocolHandler", &url])
+        .args(["url.dll,FileProtocolHandler", url])
         .spawn()
         .map(|_| ())
-        .map_err(|e| format!("메일 앱을 열지 못했습니다: {e}"))
+        .map_err(|e| e.to_string())
 }
 
 fn main() {
@@ -43,6 +51,7 @@ fn main() {
                 let _ = main.set_focus();
             }
         }))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(tiles::Tiles::default())
         .setup(|app| {
             let main = tauri::window::WindowBuilder::new(app, tiles::MAIN)
@@ -74,6 +83,9 @@ fn main() {
             });
             tiles::relayout(app.handle());
             tiles::watch_live(app.handle());
+            notify::register(app.handle());
+            // 개발용 MOABOM_OPEN으로 띄울 때는 지난 방송을 다시 열지 않는다(설정만 불러온다).
+            tiles::restore_session(app.handle(), std::env::var_os("MOABOM_OPEN").is_none());
 
             // 개발용: MOABOM_OPEN="soop:a,soop:b" 로 시작하면 타일을 바로 연다.
             if let Ok(list) = std::env::var("MOABOM_OPEN") {
@@ -98,6 +110,13 @@ fn main() {
             tiles::set_split_soop,
             tiles::set_chzzk_hq,
             tiles::set_quality,
+            tiles::set_restore,
+            tiles::set_notify,
+            tiles::save_group,
+            tiles::delete_group,
+            tiles::open_group,
+            update::check_update,
+            update::install_update,
             search::search,
             search::soop_exists,
             app_version,

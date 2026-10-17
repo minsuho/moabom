@@ -1,9 +1,9 @@
 //! 입력한 주소(또는 `soop:아이디` 같은 단축 표기)를 플랫폼별 재생/채팅 주소로 변환한다.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Platform {
     Soop,
