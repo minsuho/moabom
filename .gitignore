@@ -1,6 +1,9 @@
 # Rust / Tauri 빌드 산출물
 /src-tauri/target/
 /src-tauri/gen/schemas/
+/.generated/
+/node_modules/
+/artifacts/
 
 # 에디터·OS
 .vscode/

@@ -1,0 +1,231 @@
+{
+  "date": "2026-10-20",
+  "baseline_commit": "ea704cb3c7d4a27401033748c65ced7819dfa214",
+  "environment": {
+    "os": "Windows 11 Home 10.0.26200",
+    "cpu": "Intel Core i5-14600KF",
+    "logical_processors": 20,
+    "ram_gib": 32,
+    "rust": "1.99.0",
+    "tauri_cli": "2.10.1",
+    "tauri": "2.12.1",
+    "node": "22.18.0",
+    "webview2": "154.0.4258.62"
+  },
+  "release_profile": {
+    "opt_level": "s",
+    "lto": "fat",
+    "codegen_units": 1,
+    "panic": "abort",
+    "strip": "symbols",
+    "debug": 0,
+    "javascript_compress": false
+  },
+  "tests": {
+    "rust_unit_passed": 16,
+    "javascript_passed": 4,
+    "execution_shape_preserved": true,
+    "exact_protected_scripts_in_exe": 8,
+    "unchanged_vendor_files": 924,
+    "installer_payload_verified": true,
+    "normal_release_launch_without_debug_flags": true,
+    "normal_youtube_playback_verified": true,
+    "settings_restored_byte_for_byte": true,
+    "diagnostic_listeners_remaining": 0
+  },
+  "audit": {
+    "baseline": {
+      "file": "artifacts\\baseline\\Moabom.exe",
+      "size": 5192704,
+      "sha256": "4806b1c13a79c7ed53ab8977c403895668f0d8fbfc61204b610f3dd59ee88b8a",
+      "coff_symbols": 0,
+      "coff_symbol_table": 0,
+      "exports": 0,
+      "debug_types": [
+        2,
+        12,
+        13
+      ],
+      "codeview": true,
+      "debug_sections": [],
+      "aslr": true,
+      "high_entropy_aslr": true,
+      "dep": true,
+      "readable_js_names": [
+        "pickHeight",
+        "currentVideo",
+        "takeReloadSlot",
+        "playerRoot"
+      ],
+      "source_path_matches": 365
+    },
+    "release": {
+      "file": "artifacts\\release\\Moabom-0.2.1-portable\\Moabom.exe",
+      "size": 5156864,
+      "sha256": "a29f63041511f07c91dd91b2aa5f83e1b4e64190b7650d1842f905c48dd7a1d2",
+      "coff_symbols": 0,
+      "coff_symbol_table": 0,
+      "exports": 0,
+      "debug_types": [
+        13
+      ],
+      "codeview": false,
+      "debug_sections": [],
+      "aslr": true,
+      "high_entropy_aslr": true,
+      "dep": true,
+      "readable_js_names": [],
+      "source_path_matches": 0
+    }
+  },
+  "performance": {
+    "idle": {
+      "source": "artifacts/performance-final-idle.json",
+      "baseline_sha256": "4806b1c13a79c7ed53ab8977c403895668f0d8fbfc61204b610f3dd59ee88b8a",
+      "candidate_sha256": "a29f63041511f07c91dd91b2aa5f83e1b4e64190b7650d1842f905c48dd7a1d2",
+      "logical_processors": 20,
+      "runs_per_binary": 3,
+      "baseline": {
+        "startup_ms_median": 425.177,
+        "startup_ms_range": [
+          422.1274,
+          442.10060000000004
+        ],
+        "layout_roundtrip_ms_median": 34.80215,
+        "working_set_mib_median": 354.06640625,
+        "private_mib_median": 163.367578125,
+        "cpu_full_machine_percent_median": 0.0,
+        "cpu_full_machine_percent_range": [
+          0.0,
+          0.0141463553221504
+        ],
+        "foreground_verified": true,
+        "process_names": [
+          "Moabom",
+          "msedgewebview2"
+        ]
+      },
+      "candidate": {
+        "startup_ms_median": 458.4839,
+        "startup_ms_range": [
+          397.71450000000004,
+          489.14270000000005
+        ],
+        "layout_roundtrip_ms_median": 39.60825,
+        "working_set_mib_median": 354.37109375,
+        "private_mib_median": 162.2640625,
+        "cpu_full_machine_percent_median": 0.0,
+        "cpu_full_machine_percent_range": [
+          0.0,
+          0.021206969407755648
+        ],
+        "foreground_verified": true,
+        "process_names": [
+          "Moabom",
+          "msedgewebview2"
+        ]
+      }
+    },
+    "two_video": {
+      "source": "artifacts/performance-final-video.json",
+      "baseline_sha256": "4806b1c13a79c7ed53ab8977c403895668f0d8fbfc61204b610f3dd59ee88b8a",
+      "candidate_sha256": "a29f63041511f07c91dd91b2aa5f83e1b4e64190b7650d1842f905c48dd7a1d2",
+      "logical_processors": 20,
+      "runs_per_binary": 3,
+      "baseline": {
+        "startup_ms_median": 494.0104,
+        "startup_ms_range": [
+          392.8781,
+          611.1058
+        ],
+        "layout_roundtrip_ms_median": 51.072700000000005,
+        "working_set_mib_median": 1340.6677083333334,
+        "private_mib_median": 723.9015625,
+        "cpu_full_machine_percent_median": 0.5728876674450702,
+        "cpu_full_machine_percent_range": [
+          0.5360788053778178,
+          0.8827041323255221
+        ],
+        "foreground_verified": true,
+        "process_names": [
+          "Moabom",
+          "msedgewebview2"
+        ],
+        "fps_median": 29.961986664360154,
+        "fps_range": [
+          29.951459697488147,
+          29.979305882653772
+        ],
+        "new_dropped_frames": 0,
+        "viewport": [
+          1280,
+          374,
+          1
+        ]
+      },
+      "candidate": {
+        "startup_ms_median": 424.86870000000005,
+        "startup_ms_range": [
+          417.49510000000004,
+          544.0989000000001
+        ],
+        "layout_roundtrip_ms_median": 48.4768,
+        "working_set_mib_median": 1346.6890625,
+        "private_mib_median": 723.9307291666667,
+        "cpu_full_machine_percent_median": 0.6944754147086825,
+        "cpu_full_machine_percent_range": [
+          0.6060752080726967,
+          1.1978002266794783
+        ],
+        "foreground_verified": true,
+        "process_names": [
+          "Moabom",
+          "msedgewebview2"
+        ],
+        "fps_median": 29.970825788527513,
+        "fps_range": [
+          29.957225255410012,
+          30.00705463863779
+        ],
+        "new_dropped_frames": 0,
+        "viewport": [
+          1280,
+          374,
+          1
+        ]
+      }
+    }
+  },
+  "fixture": {
+    "path": "artifacts/fixtures/720p30.webm",
+    "sha256": "34b0e4627408523e6d943b4af7dc5f0f1db965bff111d519eafa8f3ca0ebf580",
+    "width": 1280,
+    "height": 720,
+    "fps": 30,
+    "frames": 240,
+    "duration_seconds": 8,
+    "codec": "VP8"
+  },
+  "signing": {
+    "authenticode": "NotSigned",
+    "updater_signature_created": false,
+    "existing_updater_public_key_preserved": true
+  },
+  "artifacts": [
+    {
+      "path": "artifacts/release/moabom_0.2.1_x64-setup.exe",
+      "bytes": 8706675,
+      "sha256": "540e4ac07ffebf701940829b3799f3e9cc238c5545c953481bda0cd478d0749a"
+    },
+    {
+      "path": "artifacts/release/moabom_0.2.1_x64-portable.zip",
+      "bytes": 11914950,
+      "sha256": "3fe158993730c6d9ef990dc8cbbb5c607c59f9b1c673362055cced8990703312"
+    },
+    {
+      "path": "artifacts/release/Moabom-0.2.1-portable/Moabom.exe",
+      "bytes": 5156864,
+      "sha256": "a29f63041511f07c91dd91b2aa5f83e1b4e64190b7650d1842f905c48dd7a1d2"
+    }
+  ]
+}

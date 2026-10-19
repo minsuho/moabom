@@ -168,20 +168,24 @@
 ### 필요한 것
 
 - [Rust](https://rustup.rs/) (stable)
+- Node.js 22 이상 (빌드 시 JavaScript 보호 처리와 호환성 테스트에 사용)
+- Python 3 (배포 실행 파일의 PE 메타데이터 검증에 사용)
 - Tauri CLI 2: `cargo install tauri-cli --version "^2"`
 - WebView2 런타임 (Windows 11에는 기본 설치)
 
 ### 실행·빌드
 
-```sh
+```powershell
+npm ci --ignore-scripts
 cd src-tauri
 cargo tauri dev      # 개발 실행
-cargo tauri build    # 설치 파일 생성 (target/release/bundle/nsis/)
+cd ..
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/release.ps1
 ```
 
-`cargo tauri build`는 자동 업데이트용 서명도 만들기 때문에 서명 키가 필요해요.
-환경 변수 `TAURI_SIGNING_PRIVATE_KEY`(키 파일 경로나 내용)와 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`를 설정하고 빌드하세요.
-키가 없다면 `cargo tauri signer generate`로 새로 만들고, `tauri.conf.json`의 `plugins.updater.pubkey`를 새 공개 키로 바꾸세요.
+배포 빌드는 `scripts/release.ps1`로 실행하세요. JavaScript 식별자 축약·주석 제거, Rust 최적화·심볼 제거, 소스 경로 치환, PE 메타데이터 검증을 거쳐 `artifacts/release/`에 설치판·포터블 zip·SHA-256을 만들어요. 빌드 상세와 성능 검증 결과는 [Release 보호 검증](docs/release-protection.md)을 참고하세요.
+
+자동 업데이트용 서명도 만들려면 기존 서명 키를 환경 변수 `TAURI_SIGNING_PRIVATE_KEY`(키 파일 경로나 내용), `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`로 전달하세요. 키가 없으면 로컬 설치판과 포터블만 생성하며 업데이트 서명은 만들지 않아요. 기존 업데이트 공개 키는 유지해요.
 
 ### 폴더 구조
 

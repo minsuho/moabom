@@ -4,7 +4,9 @@
   "version": "0.2.1",
   "identifier": "io.github.moabom",
   "build": {
-    "frontendDist": "../ui"
+    "beforeBuildCommand": "npm run build:assets",
+    "beforeDevCommand": "npm run dev:assets",
+    "frontendDist": "../.generated/ui"
   },
   "app": {
     "withGlobalTauri": true,

@@ -28,7 +28,11 @@ windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Graphics_Gd
 
 [profile.release]
 codegen-units = 1
-lto = true
+lto = "fat"
 opt-level = "s"
 panic = "abort"
-strip = true
+strip = "symbols"
+debug = 0
+debug-assertions = false
+overflow-checks = false
+incremental = false

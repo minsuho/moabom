@@ -4,7 +4,7 @@ name: 빌드 및 릴리스
 # Actions 탭에서 수동 실행하면 빌드만 하고 결과물을 아티팩트로 남긴다.
 #
 # 필요한 저장소 비밀값(Settings → Secrets and variables → Actions)
-# - TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD: 자동 업데이트 서명 키 (없으면 빌드 실패)
+# - TAURI_SIGNING_PRIVATE_KEY, TAURI_SIGNING_PRIVATE_KEY_PASSWORD: 자동 업데이트 서명 키 (태그 릴리스에 필수)
 # - VT_API_KEY: VirusTotal API 키 (있으면 검사 결과를 릴리스 노트에 넣고, 없으면 검사 부분을 뺀다)
 #
 # 릴리스 노트에 넣을 변경 내용은 주석 태그 메시지로 적는다: git tag -a v0.3.0 --cleanup=verbatim -F 노트.md
@@ -31,6 +31,11 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -51,21 +56,15 @@ jobs:
 
       # 설치 파일과 함께 자동 업데이트용 서명(.sig)도 만든다.
       - name: 빌드
-        working-directory: src-tauri
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: cargo tauri build
+        run: ./scripts/release.ps1
 
-      # 포터블: 설치 없이 압축만 풀어 실행한다. 실행 파일 옆에 확장 폴더가 있어야 한다.
+      # 검증된 포터블(확장·라이선스 포함)을 그대로 릴리스에 쓴다.
       - name: 포터블 zip 만들기
         run: |
-          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
-          $dir = "Moabom-$version-portable"
-          New-Item -ItemType Directory $dir | Out-Null
-          Copy-Item src-tauri/target/release/moabom.exe "$dir/Moabom.exe"
-          Copy-Item -Recurse src-tauri/extensions "$dir/extensions"
-          Compress-Archive -Path "$dir/*" -DestinationPath "moabom_${version}_x64-portable.zip"
+          Copy-Item artifacts/release/moabom_*_x64-portable.zip .
 
       # 앱이 새 버전을 확인할 때 읽는 파일(releases/latest/download/latest.json)과 릴리스 노트를 만든다.
       - name: 업데이트 정보·릴리스 노트 만들기

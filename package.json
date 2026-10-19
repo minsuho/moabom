@@ -1,0 +1,15 @@
+{
+  "name": "moabom-build",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build:assets": "node scripts/build-assets.mjs",
+    "dev:assets": "node scripts/build-assets.mjs --dev",
+    "test": "node --test scripts/build-assets.test.mjs"
+  },
+  "devDependencies": {
+    "acorn": "8.19.0",
+    "jsdom": "29.1.1",
+    "terser": "5.51.2"
+  }
+}

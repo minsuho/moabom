@@ -21,14 +21,14 @@ const SOOP_PER_PROFILE: usize = 3;
 const KICK_MIN_WIDTH: f64 = 1024.0;
 const BROWSER_ARGS: &str = "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection \
                             --autoplay-policy=no-user-gesture-required";
-const VIDEO_ONLY_JS: &str = include_str!("inject/video_only.js");
-const CHZZK_HQ_JS: &str = include_str!("inject/chzzk_hq.js");
-const CHZZK_SD_JS: &str = include_str!("inject/chzzk_sd.js");
-const SOOP_CHAT_JS: &str = include_str!("inject/soop_chat.js");
-const WATCHDOG_JS: &str = include_str!("inject/watchdog.js");
-const OVERLAY_JS: &str = include_str!("inject/overlay.js");
-const ASSIST_JS: &str = include_str!("inject/assist.js");
-const QUALITY_JS: &str = include_str!("inject/quality.js");
+const VIDEO_ONLY_JS: &str = include_str!(concat!(env!("MOABOM_ASSETS_DIR"), "/inject/video_only.js"));
+const CHZZK_HQ_JS: &str = include_str!(concat!(env!("MOABOM_ASSETS_DIR"), "/inject/chzzk_hq.js"));
+const CHZZK_SD_JS: &str = include_str!(concat!(env!("MOABOM_ASSETS_DIR"), "/inject/chzzk_sd.js"));
+const SOOP_CHAT_JS: &str = include_str!(concat!(env!("MOABOM_ASSETS_DIR"), "/inject/soop_chat.js"));
+const WATCHDOG_JS: &str = include_str!(concat!(env!("MOABOM_ASSETS_DIR"), "/inject/watchdog.js"));
+const OVERLAY_JS: &str = include_str!(concat!(env!("MOABOM_ASSETS_DIR"), "/inject/overlay.js"));
+const ASSIST_JS: &str = include_str!(concat!(env!("MOABOM_ASSETS_DIR"), "/inject/assist.js"));
+const QUALITY_JS: &str = include_str!(concat!(env!("MOABOM_ASSETS_DIR"), "/inject/quality.js"));
 
 /// 웹뷰에 주입하는 스크립트. `all_frames`면 iframe 안에서도 실행된다.
 #[derive(Clone)]
@@ -1881,7 +1881,19 @@ mod tests {
         let t = Tiles::default();
         let mut g = t.0.lock().unwrap();
         let scripts = g.tile_scripts(Platform::Chzzk, Quality::Low);
-        assert!(scripts.iter().any(|s| s.source.contains("let mode = 'low'")));
+        // Test behavior instead of relying on variable names/spacing removed by Release minification.
+        let quality = scripts.iter().find(|s| s.source.contains("__mvSetQuality")).unwrap();
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        let mut check = Command::new("node")
+            .arg(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/check-quality.cjs"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn().expect("Node.js is required for the embedded-script behavior test");
+        check.stdin.take().unwrap().write_all(quality.source.as_bytes()).unwrap();
+        let output = check.wait_with_output().unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         assert!(!scripts.iter().any(|s| s.source.contains("__MV_QUALITY__")));
 
         assert_eq!(Quality::Best.next(), Quality::Auto);
