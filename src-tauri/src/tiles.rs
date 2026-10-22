@@ -1,5 +1,6 @@
 //! 타일(방송 하나 = 웹뷰 하나) 관리: 생성/삭제, 격자 배치, 창 분리, 채팅, 음소거, 단축키 명령.
 
+use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
 
 use serde::Serialize;
@@ -10,7 +11,7 @@ use tauri::{
 };
 
 use crate::platforms::{self, Platform};
-use crate::store::{self, Group, Saved, SavedTile};
+use crate::store::{self, Group, Saved, SavedTile, WinGeom};
 
 pub const MAIN: &str = "main";
 pub const UI: &str = "ui";
@@ -60,7 +61,8 @@ pub struct Tile {
     url: String,
     chat_url: Option<String>,
     profile: String,
-    detached: bool,
+    /// 붙어 있는 창. 0은 메인 창, 1부터는 따로 띄운 창 번호다.
+    window: u32,
     chat_open: bool,
     video_only: bool,
     /// 페이지에서 읽은 방송인 이름과 방송 제목
@@ -146,6 +148,8 @@ pub struct Snapshot {
     restore: bool,
     notify: bool,
     groups: Vec<Group>,
+    /// 열려 있는 따로 띄운 창 번호들
+    windows: Vec<u32>,
 }
 
 pub struct Tiles(Mutex<Inner>);
@@ -157,14 +161,13 @@ struct Inner {
     selected: Option<u32>,
     /// 선택한 타일까지 포함해 전부 음소거
     muted: bool,
-    /// 메인 창 오른쪽 채팅 영역에 보이는 채팅(한 번에 하나)
-    chat_shown: Option<u32>,
     layout: Layout,
-    fullscreen: bool,
+    /// 전체 화면인 창 번호들(0은 메인 창)
+    fullscreen: Vec<u32>,
     /// 검색창 아래에 펼친 검색 결과 패널(창 기준 좌표). 방송 위에 겹쳐 그린다.
     panel: Option<Rect>,
-    /// 마지막 배치에서 메인 창에 붙은 타일들의 위치(창 기준). 끌어서 옮길 때 놓을 곳을 찾는 데 쓴다.
-    rects: Vec<(u32, Rect)>,
+    /// 마지막 배치에서 각 타일의 (타일, 창 번호, 창 안 위치). 끌어서 옮길 때 놓을 곳을 찾는 데 쓴다.
+    rects: Vec<(u32, u32, Rect)>,
     /// 끌고 있는 타일과, 지금 마우스 아래에 있는(놓으면 자리를 바꿀) 타일
     drag: Option<(u32, Option<u32>)>,
     split_soop: bool,
@@ -178,6 +181,12 @@ struct Inner {
     groups: Vec<Group>,
     /// 마지막 방송을 다시 여는 중. 다 열기 전에는 저장하지 않는다(중간에 꺼지면 목록이 줄어든다).
     restoring: bool,
+    /// 열려 있는 따로 띄운 창 번호들(작은 번호부터)
+    windows: Vec<u32>,
+    /// 창 번호별 마지막 위치·크기. 창을 닫아도 남겨 두고, 같은 번호 창을 다시 열 때 쓴다.
+    geoms: BTreeMap<u32, WinGeom>,
+    /// 마지막으로 포커스를 받은 따로 띄운 창
+    last_window: u32,
 }
 
 impl Default for Tiles {
@@ -187,9 +196,8 @@ impl Default for Tiles {
             next_id: 0,
             selected: None,
             muted: false,
-            chat_shown: None,
             layout: Layout::Grid,
-            fullscreen: false,
+            fullscreen: Vec::new(),
             panel: None,
             rects: Vec::new(),
             drag: None,
@@ -201,6 +209,9 @@ impl Default for Tiles {
             notify: true,
             groups: Vec::new(),
             restoring: false,
+            windows: Vec::new(),
+            geoms: BTreeMap::new(),
+            last_window: 0,
         }))
     }
 }
@@ -211,15 +222,16 @@ impl Inner {
             tiles: self.tiles.clone(),
             selected: self.selected,
             muted: self.muted,
-            chat_shown: self.chat_shown,
+            chat_shown: self.chat_shown(),
             layout: self.layout,
-            fullscreen: self.fullscreen,
+            fullscreen: self.fullscreen.contains(&0),
             split_soop: self.split_soop,
             chzzk_hq: self.chzzk_hq,
             quality: self.quality,
             restore: self.restore,
             notify: self.notify,
             groups: self.groups.clone(),
+            windows: self.windows.clone(),
         }
     }
 
@@ -233,6 +245,7 @@ impl Inner {
                 quality: t.quality,
                 volume: t.volume,
                 mix: t.mix,
+                window: t.window,
             })
             .collect()
     }
@@ -248,6 +261,7 @@ impl Inner {
             tiles: self.saved_tiles(),
             selected: self.tiles.iter().position(|t| Some(t.id) == self.selected),
             groups: self.groups.clone(),
+            windows: self.geoms.clone(),
         }
     }
 
@@ -300,6 +314,47 @@ impl Inner {
     fn target(&self) -> Option<u32> {
         self.selected.or_else(|| self.tiles.first().map(|t| t.id))
     }
+
+    fn in_window(&self, n: u32) -> impl Iterator<Item = &Tile> {
+        self.tiles.iter().filter(move |t| t.window == n)
+    }
+
+    /// 컨트롤 바 채팅 드롭다운에 보일 채팅: 메인 창에 열린 채팅, 없으면 따로 띄운 창에 열린 채팅.
+    fn chat_shown(&self) -> Option<u32> {
+        let open = |main: bool| self.tiles.iter().find(|t| t.chat_open && (t.window == 0) == main);
+        open(true).or_else(|| open(false)).map(|t| t.id)
+    }
+
+    /// 새로 띄울 창 번호: 쓰고 있지 않은 가장 작은 번호.
+    fn free_window(&self) -> u32 {
+        (1..).find(|n| !self.windows.contains(n)).unwrap()
+    }
+
+    /// 새 방송을 열 창. 메인 창에 방송이 있거나 따로 띄운 창이 없으면 메인 창,
+    /// 아니면(방송을 모두 떼어 냈으면) 마지막으로 본 따로 띄운 창.
+    fn add_target(&self) -> u32 {
+        if self.windows.is_empty() || self.in_window(0).next().is_some() {
+            0
+        } else if self.windows.contains(&self.last_window) {
+            self.last_window
+        } else {
+            self.windows[0]
+        }
+    }
+
+    /// 따로 띄운 창의 제목: 들어 있는 방송 이름들. 방송이 하나면 방송 제목도 붙인다.
+    fn window_title(&self, n: u32) -> String {
+        let name = |t: &Tile| t.name.clone().unwrap_or_else(|| t.channel.clone());
+        let tiles: Vec<&Tile> = self.in_window(n).collect();
+        let body = match tiles.as_slice() {
+            [t] => match &t.title {
+                Some(title) => format!("{} - {title}", name(t)),
+                None => name(t),
+            },
+            _ => tiles.iter().map(|t| name(t)).collect::<Vec<_>>().join(", "),
+        };
+        format!("{body} · {} {n}번 창", crate::APP_NAME)
+    }
 }
 
 fn err(e: impl std::fmt::Display) -> String {
@@ -312,8 +367,9 @@ fn tile_label(id: u32) -> String {
 fn chat_label(id: u32) -> String {
     format!("chat-{id}")
 }
-fn win_label(id: u32) -> String {
-    format!("win-{id}")
+/// 따로 띄운 창(번호 n)의 이름
+fn window_label(n: u32) -> String {
+    format!("grid-{n}")
 }
 fn tile_id(label: &str) -> Option<u32> {
     label.strip_prefix("tile-")?.parse().ok()
@@ -412,7 +468,7 @@ fn adopt_popup_chat(app: &AppHandle, id: u32) {
             let g = state.0.lock().unwrap();
             match g.get(id) {
                 // 그사이 다른 채팅을 골랐거나 방송을 닫았으면 버린다.
-                Ok(t) if t.detached || g.chat_shown == Some(id) => t.clone(),
+                Ok(t) if t.chat_open => t.clone(),
                 _ => {
                     drop(g);
                     close_chat(&app, id);
@@ -457,19 +513,29 @@ fn restore_page_state(wv: &Webview) {
     push_overlay(app);
 }
 
-/// 타일이 지금 붙어 있는 창(메인 또는 분리 창).
+/// 타일이 지금 붙어 있는 창(메인 창 또는 따로 띄운 창).
 fn host_window(app: &AppHandle, tile: &Tile) -> Result<Window, String> {
-    let label = if tile.detached { win_label(tile.id) } else { MAIN.to_string() };
-    app.get_window(&label).ok_or_else(|| "창을 찾을 수 없습니다".to_string())
+    window_of(app, tile.window).ok_or_else(|| "창을 찾을 수 없습니다".to_string())
+}
+
+/// 창 번호(0은 메인 창)로 창을 찾는다.
+fn window_of(app: &AppHandle, n: u32) -> Option<Window> {
+    if n == 0 { app.get_window(MAIN) } else { app.get_window(&window_label(n)) }
 }
 
 /// 상태가 바뀔 때마다 부른다. 컨트롤 바에 알리고 설정 파일에도 저장한다.
 fn emit(app: &AppHandle) {
-    let (snap, saved) = {
+    let (snap, saved, titles) = {
         let state = app.state::<Tiles>();
         let g = state.0.lock().unwrap();
-        (g.snapshot(), (!g.restoring).then(|| g.saved()))
+        let titles: Vec<(u32, String)> = g.windows.iter().map(|&n| (n, g.window_title(n))).collect();
+        (g.snapshot(), (!g.restoring).then(|| g.saved()), titles)
     };
+    for (n, title) in titles {
+        if let Some(win) = window_of(app, n) {
+            let _ = win.set_title(&title);
+        }
+    }
     let _ = app.emit_to(UI, "tiles", snap);
     if let Some(saved) = saved {
         store::save(app, &saved);
@@ -481,6 +547,7 @@ fn toast(app: &AppHandle, msg: &str) {
 }
 
 fn refresh(app: &AppHandle) {
+    prune_windows(app);
     apply_audio(app);
     relayout(app);
     push_overlay(app);
@@ -503,10 +570,10 @@ fn push_overlay(app: &AppHandle) {
                     "total": g.tiles.len(),
                     "selected": g.selected == Some(t.id),
                     "muted": g.muted,
-                    "chat": t.chat_open || g.chat_shown == Some(t.id),
-                    "detached": t.detached,
+                    "chat": t.chat_open,
+                    "detached": t.window != 0,
                     "videoOnly": t.video_only,
-                    "fullscreen": g.fullscreen && !t.detached,
+                    "fullscreen": g.fullscreen.contains(&t.window),
                     "quality": g.quality_of(t).as_str(),
                     "offline": t.live == Some(false),
                     "image": t.image,
@@ -592,48 +659,123 @@ fn on_tile_message(app: &AppHandle, id: u32, text: &str) {
     });
 }
 
-/// 오버레이에서 타일을 끄는 중이면 마우스 아래 타일을 표시하고, 놓으면 두 타일의 자리를 바꾼다.
-/// 좌표는 끄는 타일 기준이라 그 타일의 위치를 더해 창 기준으로 바꾼다.
+/// 오버레이에서 타일을 끄는 중이면 마우스 아래 타일을 표시하고, 놓으면 그 자리로 옮긴다.
+/// 같은 창의 방송 위면 두 방송 자리를 바꾸고, 다른 창의 방송 위면 그 창의 그 자리로,
+/// 다른 창의 빈 곳(방송이 없는 메인 창 포함)이면 그 창 끝으로 옮긴다.
+/// 좌표는 끄는 타일 기준(CSS 픽셀)이고 창마다 화면 배율이 다를 수 있어, 화면 물리 좌표로 바꿔 비교한다.
 fn on_drag(app: &AppHandle, id: u32, data: &serde_json::Value) {
     let (x, y) = (data["x"].as_f64().unwrap_or(f64::NAN), data["y"].as_f64().unwrap_or(f64::NAN));
     let end = data["end"].as_bool().unwrap_or(false);
-    let changed = {
+    let (rects, windows) = {
         let state = app.state::<Tiles>();
-        let mut g = state.0.lock().unwrap();
-        let Some(origin) = g.rects.iter().find(|(t, _)| *t == id).map(|(_, r)| *r) else { return };
-        let (px, py) = (origin.x + x, origin.y + y);
-        let target = g
-            .rects
+        let g = state.0.lock().unwrap();
+        (g.rects.clone(), std::iter::once(0).chain(g.windows.iter().copied()).collect::<Vec<u32>>())
+    };
+    // 창마다 (번호, 안쪽 영역의 화면 좌표, 배율). 창 메서드는 잠금 밖에서 부른다.
+    let frames: Vec<(u32, Rect, f64)> = windows
+        .iter()
+        .filter_map(|&n| {
+            let win = window_of(app, n)?;
+            let (pos, size, scale) = (win.inner_position().ok()?, win.inner_size().ok()?, win.scale_factor().ok()?);
+            let r = Rect { x: pos.x as f64, y: pos.y as f64, w: size.width as f64, h: size.height as f64 };
+            Some((n, r, scale))
+        })
+        .collect();
+    let frame = |n: u32| frames.iter().find(|f| f.0 == n).map(|f| (f.1, f.2));
+    let on_screen = |n: u32, r: Rect| frame(n).map(|(f, s)| Rect { x: f.x + r.x * s, y: f.y + r.y * s, w: r.w * s, h: r.h * s });
+    let inside = |r: Rect, px: f64, py: f64| px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h;
+
+    let Some(&(_, src, origin)) = rects.iter().find(|(t, _, _)| *t == id) else { return };
+    let (Some((_, scale)), Some(o)) = (frame(src), on_screen(src, origin)) else { return };
+    let (px, py) = (o.x + x * scale, o.y + y * scale);
+    // 창이 겹쳐 있으면 마우스 아래에 실제로 보이는(맨 앞의) 창을 고른다.
+    let hit = window_at(app, &frames, px, py);
+    let target = hit.and_then(|h| {
+        rects
             .iter()
-            .find(|(t, r)| *t != id && px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h)
-            .map(|(t, _)| *t);
-        if end {
-            g.drag = None;
-            if let Some(dst) = target {
-                let i = g.tiles.iter().position(|t| t.id == id);
-                let j = g.tiles.iter().position(|t| t.id == dst);
-                if let (Some(i), Some(j)) = (i, j) {
-                    g.tiles.swap(i, j);
-                }
-            }
-            true
-        } else {
-            let next = Some((id, target));
+            .filter(|(t, n, _)| *t != id && *n == h)
+            .find(|(_, n, r)| on_screen(*n, *r).is_some_and(|r| inside(r, px, py)))
+            .map(|(t, n, _)| (*t, *n))
+    });
+    let target_window = hit.filter(|&n| n != src);
+
+    if !end {
+        let changed = {
+            let state = app.state::<Tiles>();
+            let mut g = state.0.lock().unwrap();
+            let next = Some((id, target.map(|(t, _)| t)));
             let changed = g.drag != next;
             g.drag = next;
             changed
+        };
+        if changed {
+            push_overlay(app);
+        }
+        return;
+    }
+    let to = {
+        let state = app.state::<Tiles>();
+        let mut g = state.0.lock().unwrap();
+        g.drag = None;
+        let pos = |g: &Inner, id: u32| g.tiles.iter().position(|t| t.id == id);
+        match (target, target_window) {
+            (Some((dst, n)), _) if n == src => {
+                if let (Some(i), Some(j)) = (pos(&g, id), pos(&g, dst)) {
+                    g.tiles.swap(i, j);
+                }
+                None
+            }
+            (_, Some(n)) => {
+                // 다른 창: 놓은 방송 자리(빈 곳이면 그 창의 마지막 방송 뒤)로 순서를 옮긴 뒤 창을 옮긴다.
+                if let Some(i) = pos(&g, id) {
+                    let tile = g.tiles.remove(i);
+                    let at = match target {
+                        Some((dst, _)) => pos(&g, dst),
+                        None => g.tiles.iter().rposition(|t| t.window == n).map(|j| j + 1),
+                    };
+                    let at = at.unwrap_or(g.tiles.len());
+                    g.tiles.insert(at, tile);
+                }
+                Some(n)
+            }
+            _ => None,
         }
     };
-    if end {
-        refresh(app);
-    } else if changed {
-        push_overlay(app);
+    match to {
+        // 웹뷰를 다른 창으로 옮기는 일은 이 메시지 처리(메인 스레드)가 끝난 뒤에 한다.
+        Some(n) => {
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = move_tiles(&app, &[id], n) {
+                    toast(&app, &e);
+                }
+            });
+        }
+        None => refresh(app),
     }
+}
+
+/// 화면 물리 좌표 (px, py)에 보이는 우리 창 번호. 다른 프로그램 창이나 바탕 화면이면 None.
+#[cfg(windows)]
+fn window_at(app: &AppHandle, frames: &[(u32, Rect, f64)], px: f64, py: f64) -> Option<u32> {
+    use windows::Win32::Foundation::POINT;
+    use windows::Win32::UI::WindowsAndMessaging::{GetAncestor, WindowFromPoint, GA_ROOT};
+    // 방송 웹뷰는 창 안의 자식 창이므로 맨 위 부모 창으로 올라가 비교한다.
+    let top = unsafe { GetAncestor(WindowFromPoint(POINT { x: px as i32, y: py as i32 }), GA_ROOT) };
+    frames
+        .iter()
+        .map(|f| f.0)
+        .find(|&n| window_of(app, n).and_then(|w| w.hwnd().ok()).is_some_and(|h| h.0 as isize == top.0 as isize))
+}
+
+#[cfg(not(windows))]
+fn window_at(_app: &AppHandle, frames: &[(u32, Rect, f64)], px: f64, py: f64) -> Option<u32> {
+    frames.iter().find(|(_, r, _)| px >= r.x && px < r.x + r.w && py >= r.y && py < r.y + r.h).map(|f| f.0)
 }
 
 fn set_meta(app: &AppHandle, id: u32, data: &serde_json::Value) {
     let clean = |v: &serde_json::Value| v.as_str().map(str::trim).filter(|s| !s.is_empty()).map(str::to_string);
-    let detached = {
+    {
         let state = app.state::<Tiles>();
         let mut g = state.0.lock().unwrap();
         let Ok(t) = g.get_mut(id) else { return };
@@ -641,17 +783,8 @@ fn set_meta(app: &AppHandle, id: u32, data: &serde_json::Value) {
         let name = clean(&data["name"]).filter(|n| !n.eq_ignore_ascii_case(&t.channel));
         t.name = name.or_else(|| t.nick.clone()).or_else(|| t.name.take());
         t.title = clean(&data["title"]);
-        t.detached.then(|| (t.name.clone().unwrap_or_else(|| t.channel.clone()), t.title.clone()))
-    };
-    if let Some((name, title)) = detached {
-        if let Some(win) = app.get_window(&win_label(id)) {
-            let text = match title {
-                Some(title) => format!("{name} - {title}"),
-                None => name,
-            };
-            let _ = win.set_title(&text);
-        }
     }
+    // 따로 띄운 창 제목(방송 이름)도 emit에서 함께 바꾼다.
     emit(app);
 }
 
@@ -883,67 +1016,55 @@ fn logical_size(win: &Window) -> Option<(f64, f64)> {
 pub fn relayout(app: &AppHandle) {
     let Some(main) = app.get_window(MAIN) else { return };
     let Some((w, h)) = logical_size(&main) else { return };
+    // 따로 띄운 창들의 크기. 창 메서드는 잠금 밖에서 부른다(push_overlay 주석 참고).
+    let windows = app.state::<Tiles>().0.lock().unwrap().windows.clone();
+    let sizes: Vec<(u32, f64, f64)> = windows
+        .iter()
+        .filter_map(|&n| window_of(app, n).and_then(|win| logical_size(&win)).map(|(ww, wh)| (n, ww, wh)))
+        .collect();
 
     // 배치는 잠금 안에서 계산만 하고, 실제 웹뷰 이동은 잠금을 푼 뒤에 한다(push_overlay 주석 참고).
     let mut moves: Vec<(String, Rect)> = Vec::new();
-    let detached: Vec<(u32, bool)>;
+    let mut rects: Vec<(u32, u32, Rect)> = Vec::new();
     let kick: Vec<u32>;
     let panel: Option<Rect>;
     {
         let state = app.state::<Tiles>();
         let g = state.0.lock().unwrap();
-        let attached: Vec<&Tile> = g.tiles.iter().filter(|t| !t.detached).collect();
-        let shown = g.chat_shown.filter(|id| attached.iter().any(|t| t.id == *id));
+        let main_empty = g.in_window(0).next().is_none();
+        let main_full = g.fullscreen.contains(&0);
 
         // 전체 화면에서는 컨트롤 바를 숨기고 방송만 채운다.
-        let top = if g.fullscreen { 0.0 } else { BAR_H };
-        // 방송이 없으면 컨트롤 바 웹뷰가 창 전체를 채워 안내 화면을 보여준다.
+        let top = if main_full { 0.0 } else { BAR_H };
+        // 메인 창에 방송이 없으면 컨트롤 바 웹뷰가 창 전체를 채워 안내 화면을 보여준다.
         // 검색 결과가 열려 있으면 그 아래까지 늘리고, 바와 결과 패널 모양으로 잘라 방송 위에 겹친다.
-        panel = g.panel.filter(|_| !attached.is_empty() && !g.fullscreen);
+        panel = g.panel.filter(|_| !main_empty && !main_full);
         let ui_h = match panel {
-            _ if attached.is_empty() => h,
+            _ if main_empty => h,
             Some(p) => top.max(p.y + p.h),
             None => top,
         };
         moves.push((UI.to_string(), Rect { x: 0.0, y: 0.0, w, h: ui_h.max(1.0) }));
 
-        let dock = if shown.is_some() { CHAT_W.min(w * 0.4) } else { 0.0 };
-        let area = Rect { x: 0.0, y: top, w: (w - dock).max(1.0), h: (h - top).max(1.0) };
-        let rects = match g.layout {
-            Layout::Grid => grid(area, attached.len()),
-            Layout::Focus | Layout::Bottom => {
-                let main_idx = attached.iter().position(|t| Some(t.id) == g.selected).unwrap_or(0);
-                if g.layout == Layout::Focus {
-                    focus(area, attached.len(), main_idx)
-                } else {
-                    bottom(area, attached.len(), main_idx)
-                }
+        // 창마다 방송을 배치하고, 그 창에 열린 채팅은 오른쪽 채팅 영역에 둔다. 따로 띄운 창에는 컨트롤 바가 없다.
+        let frames = std::iter::once((0, w, h, top)).chain(sizes.iter().map(|&(n, ww, wh)| (n, ww, wh, 0.0)));
+        for (n, ww, wh, top) in frames {
+            let tiles: Vec<&Tile> = g.in_window(n).collect();
+            let chat = tiles.iter().find(|t| t.chat_open).map(|t| t.id);
+            let dock = if chat.is_some() { CHAT_W.min(ww * 0.4) } else { 0.0 };
+            let area = Rect { x: 0.0, y: top, w: (ww - dock).max(1.0), h: (wh - top).max(1.0) };
+            for (t, r) in tiles.iter().zip(arrange(&g, area, &tiles)) {
+                moves.push((tile_label(t.id), r));
+                rects.push((t.id, n, r));
             }
-        };
-        for (t, r) in attached.iter().zip(rects) {
-            moves.push((tile_label(t.id), r));
+            if let Some(id) = chat {
+                moves.push((chat_label(id), Rect { x: ww - dock, y: top, w: dock, h: area.h }));
+            }
         }
-        if let Some(id) = shown {
-            moves.push((chat_label(id), Rect { x: w - dock, y: top, w: dock, h: area.h }));
-        }
-        detached = g.tiles.iter().filter(|t| t.detached).map(|t| (t.id, t.chat_open)).collect();
         kick = g.tiles.iter().filter(|t| t.platform == Platform::Kick).map(|t| t.id).collect();
     }
+    app.state::<Tiles>().0.lock().unwrap().rects = rects;
 
-    app.state::<Tiles>().0.lock().unwrap().rects = moves
-        .iter()
-        .filter_map(|(label, r)| tile_id(label).map(|id| (id, *r)))
-        .collect();
-
-    for (id, chat_open) in detached {
-        let Some(win) = app.get_window(&win_label(id)) else { continue };
-        let Some((ww, wh)) = logical_size(&win) else { continue };
-        let chat_w = if chat_open { CHAT_W.min(ww * 0.4) } else { 0.0 };
-        moves.push((tile_label(id), Rect { x: 0.0, y: 0.0, w: ww - chat_w, h: wh }));
-        if chat_open {
-            moves.push((chat_label(id), Rect { x: ww - chat_w, y: 0.0, w: chat_w, h: wh }));
-        }
-    }
     for (label, r) in moves {
         place(app, &label, r);
         // 좁은 킥 타일은 확대 비율을 낮춰 킥이 화면 폭을 KICK_MIN_WIDTH로 인식하게 한다(조작 바가 생긴다).
@@ -958,6 +1079,16 @@ pub fn relayout(app: &AppHandle) {
     }
     if let Some(ui) = app.get_webview(UI) {
         set_ui_shape(&ui, w, panel);
+    }
+}
+
+/// 한 창 안의 방송 자리를 정한다. 크게 볼 방송은 선택한 방송이고, 그 창에 없으면 첫 방송이다.
+fn arrange(g: &Inner, area: Rect, tiles: &[&Tile]) -> Vec<Rect> {
+    let main_idx = tiles.iter().position(|t| Some(t.id) == g.selected).unwrap_or(0);
+    match g.layout {
+        Layout::Grid => grid(area, tiles.len()),
+        Layout::Focus => focus(area, tiles.len(), main_idx),
+        Layout::Bottom => bottom(area, tiles.len(), main_idx),
     }
 }
 
@@ -1002,83 +1133,235 @@ fn set_ui_shape(_wv: &Webview, _w: f64, _panel: Option<Rect>) {}
 
 // ---------- 창 분리 ----------
 
-fn detach(app: &AppHandle, id: u32) -> Result<(), String> {
-    let tile = app.state::<Tiles>().0.lock().unwrap().get(id)?.clone();
-    if tile.detached {
-        return Ok(());
+/// 따로 띄운 창 n을 연다(이미 있으면 그 창, 0이면 메인 창). 기억해 둔 위치·크기가 있으면 그 자리에 연다.
+fn ensure_window(app: &AppHandle, n: u32) -> Result<Window, String> {
+    if let Some(win) = window_of(app, n) {
+        return Ok(win);
     }
-    let title = tile.name.clone().unwrap_or_else(|| tile.channel.clone());
-    let win = tauri::window::WindowBuilder::new(app, win_label(id))
-        .title(format!("{title} - {}", crate::APP_NAME))
-        .inner_size(960.0, 540.0)
+    let geom = app.state::<Tiles>().0.lock().unwrap().geoms.get(&n).copied();
+    let win = tauri::window::WindowBuilder::new(app, window_label(n))
+        .title(format!("{} {n}번 창", crate::APP_NAME))
+        .inner_size(1280.0, 720.0)
+        .min_inner_size(320.0, 180.0)
         .background_color(Color(0, 0, 0, 255))
         .theme(Some(tauri::Theme::Dark))
+        .visible(false)
         .build()
         .map_err(err)?;
-
-    // 웹뷰를 새로 만들지 않고 옮겨 붙이므로 방송이 끊기지 않는다.
-    if let Some(wv) = app.get_webview(&tile_label(id)) {
-        wv.reparent(&win).map_err(err)?;
+    restore_geometry(&win, geom);
+    // 처음 여는 번호의 창은 메인 창에서 조금씩 비켜 띄워 창끼리 정확히 겹치지 않게 한다.
+    if geom.is_none()
+        && let Some(pos) = app.get_window(MAIN).and_then(|m| m.outer_position().ok())
+    {
+        let step = 40 * n as i32;
+        let _ = win.set_position(tauri::PhysicalPosition::new(pos.x + step, pos.y + step));
     }
-    move_chat(app, &tile, &win)?;
+    let _ = win.show();
     {
         let state = app.state::<Tiles>();
         let mut g = state.0.lock().unwrap();
-        // 메인 채팅 영역에 보이던 채팅은 방송과 함께 분리 창으로 옮겨 간다.
-        if g.chat_shown == Some(id) {
-            g.chat_shown = None;
+        if let Err(i) = g.windows.binary_search(&n) {
+            g.windows.insert(i, n);
         }
-        g.get_mut(id)?.detached = true;
+        g.last_window = n;
     }
-
     let app2 = app.clone();
     win.on_window_event(move |e| match e {
-        WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => relayout(&app2),
+        WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => {
+            remember_geometry(&app2, n);
+            relayout(&app2);
+        }
+        WindowEvent::Moved(_) => remember_geometry(&app2, n),
+        WindowEvent::Focused(true) => app2.state::<Tiles>().0.lock().unwrap().last_window = n,
         WindowEvent::CloseRequested { api, .. } => {
-            // 분리 창을 닫으면 방송을 끄지 않고 메인 창으로 돌려보낸다.
+            // 창을 닫으면 방송을 끄지 않고 메인 창으로 돌려보낸다.
             api.prevent_close();
             let app3 = app2.clone();
             tauri::async_runtime::spawn(async move {
-                let _ = attach(&app3, id);
+                if let Err(e) = merge_window(&app3, n) {
+                    toast(&app3, &e);
+                }
             });
         }
         _ => {}
     });
-    refresh(app);
-    Ok(())
+    Ok(win)
 }
 
-fn attach(app: &AppHandle, id: u32) -> Result<(), String> {
-    let main = app.get_window(MAIN).ok_or("메인 창이 없습니다")?;
-    let Some(win) = app.get_window(&win_label(id)) else { return Ok(()) };
-    if let Some(wv) = app.get_webview(&tile_label(id)) {
-        wv.reparent(&main).map_err(err)?;
-    }
-    // `if let` 조건에서 잠그면 블록 끝까지 잠금이 유지돼 웹뷰 작업 중 교착 상태가 되므로, 먼저 복사해 둔다.
-    let tile = app.state::<Tiles>().0.lock().unwrap().get(id).cloned();
-    if let Ok(tile) = tile {
-        move_chat(app, &tile, &main)?;
-    }
-    // 분리 창에서 채팅을 보고 있었다면 메인 채팅 영역으로 가져온다(채팅 영역에는 하나만 보인다).
-    let replaced = {
+/// 방송들을 창 `to`(0은 메인 창)로 옮긴다. 웹뷰를 새로 만들지 않고 옮겨 붙이므로 방송이 끊기지 않고,
+/// 같은 방송이 두 창에서 재생되는 일도 없다. 열려 있던 채팅도 함께 옮기고, 비게 된 창은 닫는다.
+fn move_tiles(app: &AppHandle, ids: &[u32], to: u32) -> Result<(), String> {
+    // 창을 띄우기 전에 소속부터 바꿔 둔다. 그사이 다른 곳에서 정리가 돌아도 새 창이 빈 창으로 보여 닫히지 않는다.
+    let (moving, replaced) = {
         let state = app.state::<Tiles>();
         let mut g = state.0.lock().unwrap();
-        let chat_open = g.get(id).map(|t| t.chat_open).unwrap_or(false);
-        let prev = g.chat_shown.filter(|&p| chat_open && p != id);
-        if chat_open {
-            g.chat_shown = Some(id);
+        let mut moving = Vec::new();
+        for t in g.tiles.iter_mut().filter(|t| ids.contains(&t.id) && t.window != to) {
+            moving.push((t.clone(), t.window));
+            t.window = to;
         }
-        if let Ok(t) = g.get_mut(id) {
-            t.detached = false;
-        }
-        prev
+        // 창마다 채팅 영역에는 채팅 하나만 보인다. 옮겨 가는 채팅이 있으면 첫 채팅만 남기고 나머지는 닫는다.
+        let kept = moving.iter().find(|(t, _)| t.chat_open).map(|(t, _)| t.id);
+        let replaced: Vec<u32> = match kept {
+            Some(kept) => g.in_window(to).filter(|t| t.chat_open && t.id != kept).map(|t| t.id).collect(),
+            None => Vec::new(),
+        };
+        (moving, replaced)
     };
-    if let Some(prev) = replaced {
-        close_chat(app, prev);
+    if moving.is_empty() {
+        return Ok(());
     }
-    let _ = win.destroy();
+    let host = match ensure_window(app, to) {
+        Ok(host) => host,
+        Err(e) => {
+            {
+                let state = app.state::<Tiles>();
+                let mut g = state.0.lock().unwrap();
+                for (t, from) in &moving {
+                    if let Ok(tile) = g.get_mut(t.id) {
+                        tile.window = *from;
+                    }
+                }
+            }
+            refresh(app);
+            return Err(format!("창을 띄우지 못했습니다: {e}"));
+        }
+    };
+    for id in replaced {
+        close_chat(app, id);
+    }
+    let mut first_err = None;
+    for (t, _) in &moving {
+        if let Some(wv) = app.get_webview(&tile_label(t.id))
+            && let Err(e) = wv.reparent(&host)
+        {
+            first_err.get_or_insert(err(e));
+        }
+        // 위에서 닫은 채팅은 웹뷰가 없어 그냥 넘어간다.
+        if let Err(e) = move_chat(app, t, &host) {
+            first_err.get_or_insert(e);
+        }
+    }
     refresh(app);
-    Ok(())
+    first_err.map_or(Ok(()), |e| Err(format!("방송을 옮기지 못했습니다: {e}")))
+}
+
+/// 방송이 하나도 없는 따로 띄운 창은 닫는다. 메인 창에 방송이 없으면 메인 창 전체 화면도 푼다.
+fn prune_windows(app: &AppHandle) {
+    let (empty, unfull_main) = {
+        let state = app.state::<Tiles>();
+        let mut g = state.0.lock().unwrap();
+        let empty: Vec<u32> = g.windows.iter().copied().filter(|&n| g.in_window(n).next().is_none()).collect();
+        let unfull_main = g.in_window(0).next().is_none() && g.fullscreen.contains(&0);
+        if unfull_main {
+            g.fullscreen.retain(|&f| f != 0);
+        }
+        (empty, unfull_main)
+    };
+    for n in empty {
+        remember_geometry(app, n);
+        {
+            let state = app.state::<Tiles>();
+            let mut g = state.0.lock().unwrap();
+            g.windows.retain(|&w| w != n);
+            g.fullscreen.retain(|&f| f != n);
+        }
+        if let Some(win) = window_of(app, n) {
+            let _ = win.destroy();
+        }
+    }
+    if unfull_main && let Some(main) = app.get_window(MAIN) {
+        let _ = main.set_fullscreen(false);
+    }
+}
+
+/// 따로 띄운 창 n의 방송을 모두 메인 창으로 돌려보낸다(창은 비면서 닫힌다).
+fn merge_window(app: &AppHandle, n: u32) -> Result<(), String> {
+    let ids: Vec<u32> = app.state::<Tiles>().0.lock().unwrap().in_window(n).map(|t| t.id).collect();
+    move_tiles(app, &ids, 0)
+}
+
+/// 따로 띄운 창의 방송을 모두 메인 창으로 합친다.
+fn merge_all(app: &AppHandle) -> Result<(), String> {
+    let ids: Vec<u32> = app.state::<Tiles>().0.lock().unwrap().tiles.iter().filter(|t| t.window != 0).map(|t| t.id).collect();
+    move_tiles(app, &ids, 0)
+}
+
+/// 격자 분리(G): 따로 띄운 창의 방송에서 누르면 그 창을 메인 창으로 합친다.
+/// 메인 창에서 누르면 메인 창 방송을 통째로 새 창으로 떼어 내고, 메인 창에 방송이 없으면 모든 창을 합친다.
+fn toggle_grid(app: &AppHandle, source: Option<u32>) -> Result<(), String> {
+    let (from, main_ids, free, any_window) = {
+        let state = app.state::<Tiles>();
+        let g = state.0.lock().unwrap();
+        let from = source.and_then(|s| g.get(s).ok()).map(|t| t.window);
+        let main_ids: Vec<u32> = g.in_window(0).map(|t| t.id).collect();
+        (from, main_ids, g.free_window(), !g.windows.is_empty())
+    };
+    match from {
+        Some(n) if n != 0 => merge_window(app, n),
+        _ if !main_ids.is_empty() => move_tiles(app, &main_ids, free),
+        _ if any_window => merge_all(app),
+        _ => Err("분리할 방송이 없습니다. 방송을 먼저 추가하세요.".into()),
+    }
+}
+
+/// 창 n의 위치·크기를 기억한다. 최대화했으면 그 전 위치·크기는 그대로 두고 최대화 여부만 바꾼다.
+fn remember_geometry(app: &AppHandle, n: u32) {
+    let Some(win) = window_of(app, n).filter(|_| n != 0) else { return };
+    if win.is_minimized().unwrap_or(false) || win.is_fullscreen().unwrap_or(false) {
+        return;
+    }
+    let maximized = win.is_maximized().unwrap_or(false);
+    let rect = (!maximized).then(|| win.outer_position().ok().zip(win.inner_size().ok())).flatten();
+    let state = app.state::<Tiles>();
+    let mut g = state.0.lock().unwrap();
+    match (rect, g.geoms.get_mut(&n)) {
+        (Some((pos, size)), _) => {
+            g.geoms.insert(n, WinGeom { x: pos.x, y: pos.y, w: size.width, h: size.height, maximized: false });
+        }
+        (None, Some(geom)) => geom.maximized = maximized,
+        (None, None) => {}
+    }
+}
+
+/// 기억해 둔 위치·크기로 창을 옮긴다. 그 자리에 모니터가 없으면(모니터를 뺐으면) 기본 위치에 둔다.
+fn restore_geometry(win: &Window, geom: Option<WinGeom>) {
+    let Some(geom) = geom else { return };
+    // 창 위쪽(제목 줄)이 어느 모니터 안에 있어야 잡아서 옮길 수 있다.
+    let monitors = win.available_monitors().unwrap_or_default();
+    let Some(monitor) = monitors.iter().find(|m| {
+        let (p, s) = (m.position(), m.size());
+        let (right, bottom) = (p.x + s.width as i32, p.y + s.height as i32);
+        geom.x + 100 > p.x && geom.x < right - 100 && geom.y >= p.y - 10 && geom.y + 40 < bottom
+    }) else {
+        return;
+    };
+    // 해상도를 낮췄거나 값이 잘못돼도 그 모니터보다 커지지 않게 한다.
+    let max = monitor.size();
+    let _ = win.set_size(tauri::PhysicalSize::new(
+        geom.w.clamp(320, max.width.max(320)),
+        geom.h.clamp(180, max.height.max(180)),
+    ));
+    let _ = win.set_position(tauri::PhysicalPosition::new(geom.x, geom.y));
+    if geom.maximized {
+        let _ = win.maximize();
+    }
+}
+
+/// 종료하기 전에 따로 띄운 창 위치까지 포함해 설정을 저장한다.
+pub fn save_now(app: &AppHandle) {
+    let windows = app.state::<Tiles>().0.lock().unwrap().windows.clone();
+    for n in windows {
+        remember_geometry(app, n);
+    }
+    let saved = {
+        let state = app.state::<Tiles>();
+        let g = state.0.lock().unwrap();
+        (!g.restoring).then(|| g.saved())
+    };
+    if let Some(saved) = saved {
+        store::save(app, &saved);
+    }
 }
 
 // ---------- 타일 조작 ----------
@@ -1088,15 +1371,9 @@ async fn remove_tile(app: &AppHandle, id: u32) -> Result<(), String> {
     if let Some(wv) = app.get_webview(&tile_label(id)) {
         let _ = wv.close();
     }
-    if let Some(win) = app.get_window(&win_label(id)) {
-        let _ = win.destroy();
-    }
     {
         let state = app.state::<Tiles>();
         let mut g = state.0.lock().unwrap();
-        if g.chat_shown == Some(id) {
-            g.chat_shown = None;
-        }
         let idx = g.tiles.iter().position(|t| t.id == id);
         g.tiles.retain(|t| t.id != id);
         if g.selected == Some(id) {
@@ -1109,9 +1386,14 @@ async fn remove_tile(app: &AppHandle, id: u32) -> Result<(), String> {
     Ok(())
 }
 
+/// 창 분리(D): 메인 창의 방송은 새 창으로 떼어 내고, 따로 띄운 창의 방송은 메인 창으로 돌려보낸다.
 fn toggle_detach(app: &AppHandle, id: u32) -> Result<(), String> {
-    let detached = app.state::<Tiles>().0.lock().unwrap().get(id)?.detached;
-    if detached { attach(app, id) } else { detach(app, id) }
+    let to = {
+        let state = app.state::<Tiles>();
+        let g = state.0.lock().unwrap();
+        if g.get(id)?.window == 0 { g.free_window() } else { 0 }
+    };
+    move_tiles(app, &[id], to)
 }
 
 /// 채팅 웹뷰를 닫는다. 숲 채팅을 받을 때 쓴 숨긴 팝업 창도 함께 정리한다.
@@ -1149,30 +1431,28 @@ fn open_chat(app: &AppHandle, tile: &Tile) -> Result<(), String> {
     Ok(())
 }
 
-/// 채팅 켜기/끄기. 메인 창의 채팅 영역에는 한 번에 하나만 보이고, 다른 방송을 고르면 이전 채팅은 닫는다.
-/// 분리 창의 방송은 그 창 오른쪽에 따로 띄운다.
+/// 채팅 켜기/끄기. 채팅은 방송이 있는 창 오른쪽 채팅 영역에 뜨고 창마다 하나만 보인다.
+/// 같은 창에 다른 방송 채팅이 열려 있으면 그 채팅은 닫는다.
 fn toggle_chat(app: &AppHandle, id: u32) -> Result<(), String> {
-    let (tile, shown) = {
+    let (tile, others) = {
         let state = app.state::<Tiles>();
         let g = state.0.lock().unwrap();
-        (g.get(id)?.clone(), g.chat_shown)
+        let tile = g.get(id)?.clone();
+        let others: Vec<u32> = g.in_window(tile.window).filter(|t| t.chat_open && t.id != id).map(|t| t.id).collect();
+        (tile, others)
     };
-    if tile.detached {
-        if tile.chat_open {
-            close_chat(app, id);
-        } else {
-            open_chat(app, &tile)?;
-        }
-    } else if shown == Some(id) {
+    if tile.chat_open {
         close_chat(app, id);
-        app.state::<Tiles>().0.lock().unwrap().chat_shown = None;
     } else {
-        if let Some(prev) = shown {
-            close_chat(app, prev);
+        for other in others {
+            close_chat(app, other);
         }
-        app.state::<Tiles>().0.lock().unwrap().chat_shown = Some(id);
+        // 숲 채팅은 팝업이 뜬 뒤에야 붙으므로 미리 열린 것으로 표시해 둔다(채팅 영역 자리를 잡고, 팝업을 받을지 판단한다).
+        if let Ok(t) = app.state::<Tiles>().0.lock().unwrap().get_mut(id) {
+            t.chat_open = true;
+        }
         if let Err(e) = open_chat(app, &tile) {
-            app.state::<Tiles>().0.lock().unwrap().chat_shown = None;
+            close_chat(app, id);
             refresh(app);
             return Err(e);
         }
@@ -1413,20 +1693,30 @@ fn move_tile(app: &AppHandle, id: u32, delta: i64) {
     refresh(app);
 }
 
-fn set_fullscreen(app: &AppHandle, on: bool) {
-    if let Some(main) = app.get_window(MAIN) {
-        let _ = main.set_fullscreen(on);
+/// 창 n(0은 메인 창)을 전체 화면으로 만들거나 푼다.
+fn set_fullscreen(app: &AppHandle, n: u32, on: bool) {
+    if let Some(win) = window_of(app, n) {
+        let _ = win.set_fullscreen(on);
     }
-    app.state::<Tiles>().0.lock().unwrap().fullscreen = on;
+    {
+        let state = app.state::<Tiles>();
+        let mut g = state.0.lock().unwrap();
+        g.fullscreen.retain(|&f| f != n);
+        if on {
+            g.fullscreen.push(n);
+        }
+    }
     refresh(app);
 }
 
 /// 컨트롤 바의 주소·검색 입력칸으로 키보드 포커스를 옮긴다.
 fn focus_add_input(app: &AppHandle) {
-    if app.state::<Tiles>().0.lock().unwrap().fullscreen {
-        set_fullscreen(app, false);
+    // 따로 띄운 창이 전체 화면이어도 메인 창만 앞으로 가져오면 되므로, 메인 창이 전체 화면일 때만 푼다.
+    if app.state::<Tiles>().0.lock().unwrap().fullscreen.contains(&0) {
+        set_fullscreen(app, 0, false);
     }
     if let Some(main) = app.get_window(MAIN) {
+        let _ = main.unminimize();
         let _ = main.set_focus();
     }
     if let Some(ui) = app.get_webview(UI) {
@@ -1505,17 +1795,29 @@ async fn run_command(
             refresh(&app);
         }
         "fullscreen" | "exitfullscreen" => {
-            // 분리된 창에서 누르면 그 창을, 아니면 메인 창을 전체 화면으로 만든다.
-            let detached_win = source.and_then(|s| app.get_window(&win_label(s)));
-            if let Some(win) = detached_win {
-                let on = cmd == "fullscreen" && !win.is_fullscreen().unwrap_or(false);
-                let _ = win.set_fullscreen(on);
-            } else {
-                let on = cmd == "fullscreen" && !app.state::<Tiles>().0.lock().unwrap().fullscreen;
-                set_fullscreen(&app, on);
-            }
+            // 방송에서 누르면 그 방송이 있는 창을, 컨트롤 바에서 누르면 메인 창을 전체 화면으로 만든다.
+            // 메인 창에 방송이 없으면(모두 떼어 냈으면) 마지막으로 본 창을 전체 화면으로 만든다.
+            let (n, on) = {
+                let state = app.state::<Tiles>();
+                let g = state.0.lock().unwrap();
+                let n = source.and_then(|s| g.get(s).ok()).map_or_else(|| g.add_target(), |t| t.window);
+                (n, cmd == "fullscreen" && !g.fullscreen.contains(&n))
+            };
+            set_fullscreen(&app, n, on);
         }
         "add" => focus_add_input(&app),
+        "grid" => toggle_grid(&app, source)?,
+        "mergeall" => merge_all(&app)?,
+        // 메인 창 안내 화면의 '창 보기': 따로 띄운 창을 모두 앞으로 가져온다.
+        "showgrid" => {
+            let windows = app.state::<Tiles>().0.lock().unwrap().windows.clone();
+            for n in windows {
+                if let Some(win) = window_of(&app, n) {
+                    let _ = win.unminimize();
+                    let _ = win.set_focus();
+                }
+            }
+        }
         "help" => {
             if let Some(wv) = id.and_then(|id| app.get_webview(&tile_label(id))) {
                 let _ = wv.eval("window.__mvOverlay && window.__mvOverlay.toggleHelp()");
@@ -1560,6 +1862,8 @@ fn open_tile(app: &AppHandle, input: &str, saved: Option<&SavedTile>) -> Result<
         let state = app.state::<Tiles>();
         let mut g = state.0.lock().unwrap();
         g.next_id += 1;
+        // 저장해 둔 방송은 있던 창에, 새 방송은 add_target이 고른 창에 연다.
+        let window = saved.map_or_else(|| g.add_target(), |s| s.window);
         let tile = Tile {
             id: g.next_id,
             platform: r.platform,
@@ -1567,7 +1871,7 @@ fn open_tile(app: &AppHandle, input: &str, saved: Option<&SavedTile>) -> Result<
             channel: r.channel,
             url: r.player_url,
             chat_url: r.chat_url,
-            detached: false,
+            window,
             chat_open: false,
             video_only: true,
             // 저장해 둔 이름을 먼저 보여 주고, 페이지가 열리면 최신 이름으로 바뀐다.
@@ -1590,9 +1894,17 @@ fn open_tile(app: &AppHandle, input: &str, saved: Option<&SavedTile>) -> Result<
         let scripts = g.tile_scripts(tile.platform, g.quality_of(&tile));
         (tile, scripts)
     };
-    let main = app.get_window(MAIN).ok_or("메인 창이 없습니다")?;
+    // 따로 띄운 창에 열 방송이면 그 창부터 띄운다.
+    let host = match ensure_window(app, tile.window) {
+        Ok(host) => host,
+        Err(e) => {
+            app.state::<Tiles>().0.lock().unwrap().tiles.retain(|t| t.id != tile.id);
+            emit(app);
+            return Err(e);
+        }
+    };
     let builder = build_webview(app, &tile_label(tile.id), &tile.url, &tile.profile, &scripts)?;
-    match main.add_child(builder, LogicalPosition::new(0.0, BAR_H), LogicalSize::new(1.0, 1.0)) {
+    match host.add_child(builder, LogicalPosition::new(0.0, BAR_H), LogicalSize::new(1.0, 1.0)) {
         Ok(wv) => {
             listen_messages(app, &wv, tile.id);
             watch_first_load(app, tile.id);
@@ -1637,11 +1949,13 @@ pub fn restore_session(app: &AppHandle, reopen_tiles: bool) {
         g.split_soop = saved.split_soop;
         g.chzzk_hq = saved.chzzk_hq;
         g.groups = saved.groups;
+        g.geoms = saved.windows;
         let reopen = reopen_tiles && saved.restore && !saved.tiles.is_empty();
         g.restoring = reopen;
         reopen.then_some((saved.tiles, saved.selected))
     };
     emit(app);
+    // 따로 띄운 창에 있던 방송은 open_tile이 그 창을 같은 자리에 다시 띄워 연다.
     let Some((tiles, selected)) = reopen else { return };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -1686,9 +2000,13 @@ pub async fn set_layout(app: AppHandle, layout: Layout) -> Result<(), String> {
 /// 컨트롤 바의 채팅 드롭다운: 고른 방송의 채팅을 오른쪽 채팅 영역에 띄운다. `None`이면 채팅 영역을 닫는다.
 #[tauri::command]
 pub async fn show_chat(app: AppHandle, id: Option<u32>) -> Result<(), String> {
-    let shown = app.state::<Tiles>().0.lock().unwrap().chat_shown;
+    let (shown, open) = {
+        let state = app.state::<Tiles>();
+        let g = state.0.lock().unwrap();
+        (g.chat_shown(), id.and_then(|id| g.get(id).ok()).is_some_and(|t| t.chat_open))
+    };
     match id {
-        Some(id) if shown != Some(id) => toggle_chat(&app, id),
+        Some(id) if !open => toggle_chat(&app, id),
         None => match shown {
             Some(prev) => toggle_chat(&app, prev),
             None => Ok(()),
@@ -1825,7 +2143,7 @@ mod tests {
             url: String::new(),
             chat_url: None,
             profile,
-            detached: false,
+            window: 0,
             chat_open: false,
             video_only: true,
             name: None,
@@ -1958,6 +2276,42 @@ mod tests {
         assert!(is_vod_autoplay(&u("https://vod.sooplive.com/player/209904703/?autoplay_from_live=1&volume=1&muted=0")));
         assert!(!is_vod_autoplay(&u("https://vod.sooplive.com/player/209904703")));
         assert!(!is_vod_autoplay(&u("https://play.sooplive.com/layule")));
+    }
+
+    #[test]
+    fn new_tiles_go_to_main_unless_everything_is_detached() {
+        let t = Tiles::default();
+        let mut g = t.0.lock().unwrap();
+        assert_eq!(g.add_target(), 0);
+        g.windows = vec![1, 3];
+        assert_eq!(g.free_window(), 2);
+        // 메인 창에 방송이 없으면 마지막으로 본 창, 그 창이 닫혔으면 첫 창에 연다.
+        g.last_window = 3;
+        assert_eq!(g.add_target(), 3);
+        g.last_window = 9;
+        assert_eq!(g.add_target(), 1);
+        g.tiles.push(tile(1, Platform::Kick, "default".into()));
+        assert_eq!(g.add_target(), 0);
+    }
+
+    #[test]
+    fn chat_dropdown_prefers_main_window_and_titles_list_names() {
+        let t = Tiles::default();
+        let mut g = t.0.lock().unwrap();
+        let mut a = tile(1, Platform::Soop, "default".into());
+        a.window = 2;
+        a.chat_open = true;
+        a.name = Some("가".into());
+        let mut b = tile(2, Platform::Chzzk, "default".into());
+        b.window = 2;
+        b.channel = "nana".into();
+        g.tiles.extend([a, b]);
+        assert_eq!(g.chat_shown(), Some(1));
+        let mut c = tile(3, Platform::Kick, "default".into());
+        c.chat_open = true;
+        g.tiles.push(c);
+        assert_eq!(g.chat_shown(), Some(3));
+        assert_eq!(g.window_title(2), format!("가, nana · {} 2번 창", crate::APP_NAME));
     }
 
     #[test]

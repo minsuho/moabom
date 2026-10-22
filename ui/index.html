@@ -126,6 +126,14 @@
   .wgroups.hidden { display: none; }
   .wgroups .btn { height: 32px; }
 
+  /* 방송을 모두 다른 창으로 떼어 냈을 때 메인 창에 보이는 안내 */
+  .away { flex: 1; min-height: 0; display: grid; place-items: center; padding: 24px; text-align: center; }
+  .away.hidden { display: none; }
+  .away h1 { margin: 0 0 6px; font-size: 20px; letter-spacing: -.02em; }
+  .away p { margin: 0 0 16px; color: var(--dim); line-height: 1.6; }
+  .away .acts { display: flex; gap: 8px; justify-content: center; }
+  #gridBtn.on { border-color: var(--accent); background: #24243a; }
+
   .toast { position: fixed; right: 10px; top: 60px; max-width: 60%; padding: 8px 12px; border-radius: 8px; background: #3b1d1d;
     border: 1px solid var(--live); opacity: 0; transition: opacity .2s; pointer-events: none; z-index: 10; }
   .toast.show { opacity: 1; }
@@ -140,6 +148,8 @@
     <symbol id="i-update" viewBox="0 0 24 24"><path d="M12 15V4M7 9l5-5 5 5M5 20h14"/></symbol>
     <symbol id="i-folder" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></symbol>
     <symbol id="i-settings" viewBox="0 0 24 24"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="17" r="2"/></symbol>
+    <symbol id="i-popout" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-8 8M18 14v6H4V6h6"/></symbol>
+    <symbol id="i-popin" viewBox="0 0 24 24"><path d="M10 14H4M10 14v6M10 14l-6 6M14 4h6v16H8v-4"/></symbol>
     <symbol id="i-fullscreen" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></symbol>
   </defs>
 </svg>
@@ -170,6 +180,7 @@
   <button class="btn hidden" id="updBtn" title="새 버전이 있어요"><svg class="ic"><use href="#i-update"/></svg>업데이트</button>
   <button class="btn" id="groupBtn" title="방송 묶음을 저장하고 한 번에 열기"><svg class="ic"><use href="#i-folder"/></svg>그룹</button>
   <button class="btn icon-btn" id="gear" title="설정"><svg class="ic"><use href="#i-settings"/></svg></button>
+  <button class="btn icon-btn" id="gridBtn" title="메인 창 방송을 새 창으로 분리 (G)"><svg class="ic"><use href="#i-popout"/></svg></button>
   <button class="btn icon-btn" id="fs" title="전체 화면 (F11)"><svg class="ic"><use href="#i-fullscreen"/></svg></button>
 </div>
 <div class="panel" id="panel"></div>
@@ -235,9 +246,21 @@
       <div><kbd>F</kbd></div><span>선택한 방송 크게 보기 (포커스 / 격자)</span>
       <div><kbd>F11</kbd></div><span>전체 화면</span>
       <div><kbd>C</kbd> · <kbd>D</kbd> · <kbd>V</kbd></div><span>채팅 · 창 분리 · 사이트 보기</span>
+      <div><kbd>G</kbd></div><span>메인 창 방송 전체를 새 창으로 / 그 창을 메인 창으로 합치기</span>
       <div><kbd>R</kbd> · <kbd>Delete</kbd></div><span>새로고침 · 닫기</span>
       <div><kbd>Alt</kbd>+<kbd>←</kbd> <kbd>→</kbd></div><span>순서 옮기기</span>
       <div><kbd>?</kbd></div><span>단축키 도움말</span>
+    </div>
+  </div>
+</div>
+<div class="away hidden" id="away">
+  <div>
+    <h1 id="awayTitle">방송을 다른 창에서 보고 있어요</h1>
+    <p>여기서 방송을 추가·삭제하거나 배치를 바꾸면 그 창들에 바로 반영됩니다.<br>
+      방송을 끌어 다른 창에 놓으면 그 창으로 옮겨지고, 창을 닫으면 방송이 이 창으로 돌아와요.</p>
+    <div class="acts">
+      <button class="btn" id="showGrid" type="button">창 보기</button>
+      <button class="btn primary" id="joinGrid" type="button"><svg class="ic"><use href="#i-popin"/></svg>모두 메인 창으로 합치기</button>
     </div>
   </div>
 </div>
@@ -282,6 +305,18 @@
     $('quality').value = s.quality;
     $('count').textContent = s.tiles.length ? `방송 ${s.tiles.length}개` : '';
     $('empty').classList.toggle('hidden', s.tiles.length > 0);
+    // 메인 창에 방송이 하나도 없고 다른 창에만 있을 때 안내를 띄운다(방송이 아예 없으면 첫 화면).
+    const windows = s.windows || [];
+    const inMain = s.tiles.filter((t) => !t.window).length;
+    const away = s.tiles.length > 0 && inMain === 0;
+    $('away').classList.toggle('hidden', !away);
+    $('awayTitle').textContent = `방송을 다른 창 ${windows.length}개에서 보고 있어요`;
+    if (windows.length) $('count').textContent += ` · 창 ${windows.length}개`;
+    // 메인 창에 방송이 있으면 새 창으로 떼어 내고, 없으면 모든 창을 합친다.
+    const gb = $('gridBtn');
+    gb.classList.toggle('on', away);
+    gb.title = away ? '모든 창을 메인 창으로 합치기 (G)' : '메인 창 방송을 새 창으로 분리 (G)';
+    gb.querySelector('use').setAttribute('href', away ? '#i-popin' : '#i-popout');
     renderChat(s);
   }
 
@@ -297,7 +332,7 @@
     sel.replaceChildren(...s.tiles.map((t, i) => {
       const o = document.createElement('option');
       o.value = t.id;
-      o.textContent = `${i + 1}. ${t.name || t.channel} · ${PF[t.platform]}${t.detached ? ' (분리 창)' : ''}`;
+      o.textContent = `${i + 1}. ${t.name || t.channel} · ${PF[t.platform]}${t.window ? ` (${t.window}번 창)` : ''}`;
       return o;
     }));
     if (shown != null) sel.value = String(shown);
@@ -515,6 +550,9 @@
   $('restore').addEventListener('change', (e) => call('set_restore', { on: e.target.checked }));
   $('notify').addEventListener('change', (e) => call('set_notify', { on: e.target.checked }));
   $('fs').addEventListener('click', () => call('command', { cmd: 'fullscreen' }));
+  $('gridBtn').addEventListener('click', () => call('command', { cmd: 'grid' }));
+  $('joinGrid').addEventListener('click', () => call('command', { cmd: 'mergeall' }));
+  $('showGrid').addEventListener('click', () => call('command', { cmd: 'showgrid' }));
 
   // ---------- 그룹 ----------
   // 지금 보는 방송들을 이름 붙여 저장해 두고, 열기(지금 방송을 닫고 그룹만) 또는 더하기(지금 방송에 덧붙이기)로 연다.
@@ -695,6 +733,7 @@
       case 'Escape': return snap.fullscreen ? ['exitfullscreen'] : null;
       case 'KeyC': return ['chat'];
       case 'KeyD': return ['detach'];
+      case 'KeyG': return ['grid'];
       case 'KeyV': return ['siteview'];
       case 'KeyR': return ['reload'];
       case 'Delete': return ['close'];

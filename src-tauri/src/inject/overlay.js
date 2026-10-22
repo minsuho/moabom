@@ -140,6 +140,7 @@
     [['F11'], '전체 화면'],
     [['C'], '채팅'],
     [['D'], '창 분리 / 합치기'],
+    [['G'], '메인 창 방송 전체를 새 창으로 / 이 창을 메인 창으로 합치기'],
     [['V'], '사이트 보기 / 영상만 보기'],
     [['R'], '새로고침'],
     [['Alt+←', 'Alt+→'], '순서 옮기기'],
@@ -270,12 +271,13 @@
 
   // ---------- 끌어서 위치 옮기기 ----------
   // 번호·방송인 부분을 잡고 끌면 마우스 위치를 앱에 보내고, 앱이 마우스 아래 타일을 표시한다.
-  // 다른 웹뷰 위로 나가도 이벤트를 계속 받도록 포인터를 붙잡는다. 놓으면 앱이 두 타일의 자리를 바꾼다.
+  // 다른 웹뷰·다른 창 위로 나가도 이벤트를 계속 받도록 포인터를 붙잡는다.
+  // 놓으면 앱이 두 타일의 자리를 바꾸거나, 다른 창 위면 그 창으로 옮긴다.
   let drag = null;
   let justDragged = false;
   const dragPos = (e) => ({ x: e.clientX * (st.zoom || 1), y: e.clientY * (st.zoom || 1) });
   root.addEventListener('pointerdown', (e) => {
-    const handle = e.button === 0 && !st.detached && st.total > 1 && e.target.closest('.idx, .meta');
+    const handle = e.button === 0 && st.total > 1 && e.target.closest('.idx, .meta');
     if (!handle) return;
     drag = { id: e.pointerId, x: e.clientX, y: e.clientY, on: false, frame: 0, el: handle };
     handle.setPointerCapture(e.pointerId);
@@ -371,6 +373,7 @@
       case 'Escape': return st.fullscreen ? ['exitfullscreen'] : help.classList.contains('show') ? ['help'] : null;
       case 'KeyC': return ['chat'];
       case 'KeyD': return ['detach'];
+      case 'KeyG': return ['grid'];
       case 'KeyV': return ['siteview'];
       case 'KeyR': return ['reload'];
       case 'Delete': return ['close'];

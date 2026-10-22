@@ -77,8 +77,11 @@ fn main() {
             let handle = app.handle().clone();
             main.on_window_event(move |e| match e {
                 WindowEvent::Resized(_) | WindowEvent::ScaleFactorChanged { .. } => tiles::relayout(&handle),
-                // 메인 창을 닫으면 분리된 창까지 모두 종료
-                WindowEvent::CloseRequested { .. } => handle.exit(0),
+                // 메인 창을 닫으면 분리된 창까지 모두 종료. 격자 창 위치도 이때 저장한다.
+                WindowEvent::CloseRequested { .. } => {
+                    tiles::save_now(&handle);
+                    handle.exit(0);
+                }
                 _ => {}
             });
             tiles::relayout(app.handle());

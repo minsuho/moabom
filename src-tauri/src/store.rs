@@ -1,5 +1,6 @@
 //! 설정, 마지막으로 보던 방송, 그룹을 설정 폴더의 settings.json에 저장하고 불러온다.
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
@@ -23,10 +24,23 @@ pub struct SavedTile {
     pub volume: u8,
     #[serde(default)]
     pub mix: bool,
+    /// 이 방송이 있던 창. 0은 메인 창, 1부터는 따로 띄운 창 번호다.
+    #[serde(default)]
+    pub window: u32,
 }
 
 fn full_volume() -> u8 {
     100
+}
+
+/// 따로 띄운 창의 위치·크기(물리 픽셀). 최대화했으면 최대화 전의 위치·크기를 둔다.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WinGeom {
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+    pub maximized: bool,
 }
 
 /// 이름을 붙여 저장한 방송 묶음.
@@ -51,6 +65,8 @@ pub struct Saved {
     /// 소리를 내던 방송의 순서(0부터)
     pub selected: Option<usize>,
     pub groups: Vec<Group>,
+    /// 따로 띄운 창 번호별 마지막 위치·크기. 창을 닫아도 남겨 두고, 같은 번호 창을 다시 열 때 쓴다.
+    pub windows: BTreeMap<u32, WinGeom>,
 }
 
 impl Default for Saved {
@@ -65,6 +81,7 @@ impl Default for Saved {
             tiles: Vec::new(),
             selected: None,
             groups: Vec::new(),
+            windows: BTreeMap::new(),
         }
     }
 }
@@ -123,12 +140,15 @@ mod tests {
         assert!(s.restore && s.notify);
         assert_eq!(s.tiles[0].volume, 100);
         assert_eq!(s.tiles[0].quality, None);
+        assert_eq!(s.tiles[0].window, 0);
+        assert!(s.windows.is_empty());
     }
 
     #[test]
     fn round_trip() {
         let mut s = Saved::default();
         s.layout = Layout::Bottom;
+        s.windows.insert(2, WinGeom { x: -1920, y: 40, w: 1600, h: 900, maximized: false });
         s.groups.push(Group {
             name: "평일".into(),
             tiles: vec![SavedTile {
@@ -138,6 +158,7 @@ mod tests {
                 quality: Some(Quality::Low),
                 volume: 40,
                 mix: true,
+                window: 2,
             }],
         });
         let back: Saved = serde_json::from_str(&serde_json::to_string(&s).unwrap()).unwrap();
