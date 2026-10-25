@@ -32,7 +32,7 @@ pub fn register(app: &AppHandle) {
 }
 
 #[cfg(windows)]
-fn set_reg_string(key: &str, name: &str, value: &str) -> Result<(), String> {
+pub(crate) fn set_reg_string(key: &str, name: &str, value: &str) -> Result<(), String> {
     use windows::Win32::System::Registry::{RegSetKeyValueW, HKEY_CURRENT_USER, REG_SZ};
     use windows_core::HSTRING;
     let wide: Vec<u16> = value.encode_utf16().chain([0]).collect();

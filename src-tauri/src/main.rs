@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod link;
 mod live;
 mod notify;
 mod platforms;
@@ -45,14 +46,19 @@ pub fn open_url(url: &str) -> Result<(), String> {
 fn main() {
     tauri::Builder::default()
         // 이미 실행 중이면 새로 띄우지 않고 기존 창을 앞으로 가져온다(같은 WebView2 데이터 폴더를 두 번 쓸 수 없다).
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if let Some(main) = app.get_window(tiles::MAIN) {
                 let _ = main.unminimize();
                 let _ = main.set_focus();
             }
+            // 켜져 있을 때 지통실 링크를 누르면 새 실행이 인자를 넘겨준다
+            if let Some(l) = link::from_args(args) {
+                link::deliver(app, l);
+            }
         }))
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(tiles::Tiles::default())
+        .manage(link::PendingLink::default())
         .setup(|app| {
             let main = tauri::window::WindowBuilder::new(app, tiles::MAIN)
                 .title(APP_NAME)
@@ -87,6 +93,11 @@ fn main() {
             tiles::relayout(app.handle());
             tiles::watch_live(app.handle());
             notify::register(app.handle());
+            // 지통실 링크(moabom://): 이 실행 파일로 연결하고, 링크로 켜졌으면 컨트롤 바에 넘긴다
+            link::register();
+            if let Some(l) = link::from_args(std::env::args()) {
+                link::deliver(app.handle(), l);
+            }
             // 개발용 MOABOM_OPEN으로 띄울 때는 지난 방송을 다시 열지 않는다(설정만 불러온다).
             tiles::restore_session(app.handle(), std::env::var_os("MOABOM_OPEN").is_none());
 
@@ -124,6 +135,8 @@ fn main() {
             search::soop_exists,
             app_version,
             open_report,
+            link::take_link,
+            link::open_link,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run app");

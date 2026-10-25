@@ -92,6 +92,11 @@
   .report b { color: var(--text); font-size: 13px; user-select: text; }
   .report .acts { display: flex; gap: 6px; margin-top: 8px; }
   .report .btn { height: 28px; font-size: 12px; }
+  /* 지통실 링크 확인: 설정 창과 같은 모양, 가운데 위 */
+  .link-ask { left: 50%; right: auto; transform: translateX(-50%); width: 380px; }
+  .link-ask .items { margin: 0 8px 6px; padding: 8px 10px; border-radius: 8px; background: var(--panel2); font-size: 12px; color: var(--dim);
+    line-height: 1.7; max-height: 150px; overflow: auto; word-break: break-all; }
+  .link-ask .acts { display: flex; justify-content: flex-end; gap: 6px; margin: 6px 8px 2px; }
   #gear.on, #groupBtn.on { border-color: var(--accent); background: #24243a; }
   .upd { margin: 6px 8px 2px; padding: 10px; border-radius: 8px; background: var(--panel2); font-size: 12px; color: var(--dim); line-height: 1.6; }
   .upd b { color: var(--text); }
@@ -184,6 +189,18 @@
   <button class="btn icon-btn" id="fs" title="전체 화면 (F11)"><svg class="ic"><use href="#i-fullscreen"/></svg></button>
 </div>
 <div class="panel" id="panel"></div>
+<div class="settings link-ask" id="linkAsk" role="dialog" aria-labelledby="linkTitle">
+  <h3 id="linkTitle">지통실에서 방송 열기</h3>
+  <div class="items" id="linkItems"></div>
+  <label class="opt">
+    <input type="checkbox" id="linkSkip">
+    <div><b>다음부터 묻지 않기</b><span>지통실에서 모아봄 링크를 누르면 바로 엽니다.</span></div>
+  </label>
+  <div class="acts">
+    <button class="btn" id="linkCancel">취소</button>
+    <button class="btn primary" id="linkOk">열기</button>
+  </div>
+</div>
 <div class="settings" id="settings">
   <h3>설정</h3>
   <label class="opt">
@@ -409,6 +426,11 @@
   // 패널을 검색창 아래에 맞추고, 앱에 패널 영역을 알려 그 부분만 방송 위에 겹쳐 보이게 한다.
   function syncPanel() {
     requestAnimationFrame(() => {
+      const la = $('linkAsk');
+      if (la.classList.contains('open')) {
+        const r = la.getBoundingClientRect();
+        return call('set_panel', { x: r.left, width: r.width, height: r.height });
+      }
       const p = $('panel');
       const st = $('settings');
       if (st.classList.contains('open')) {
@@ -753,6 +775,42 @@
     if (k[0] === 'add') return window.__focusAdd();
     call('command', { cmd: k[0], arg: k[1] || 0 });
   }, true);
+
+  // 지통실 링크(moabom://open?v=…): 처음에는 묻고, '다음부터 묻지 않기'면 바로 연다
+  let pendingLink = null;
+  const LINK_SKIP = 'moabom.link.skipConfirm';
+  const skipAsk = () => { try { return localStorage.getItem(LINK_SKIP) === '1'; } catch { return false; } };
+  function openLink(l) {
+    pendingLink = null;
+    $('linkAsk').classList.remove('open');
+    syncPanel();
+    call('open_link', { items: l.items, replace: l.replace });
+  }
+  function askLink(l) {
+    if (!l || !l.items || !l.items.length) return;
+    if (skipAsk()) return openLink(l);
+    pendingLink = l;
+    closeAll();
+    const what = l.group ? `'${l.group}' 방송` : '방송';
+    $('linkTitle').textContent = `지통실에서 ${what} ${l.items.length}개 열기${l.replace ? ' (지금 보던 방송은 닫아요)' : ''}`;
+    $('linkItems').replaceChildren(...l.items.map((x) => Object.assign(document.createElement('div'), { textContent: x })));
+    $('linkSkip').checked = false;
+    $('linkAsk').classList.add('open');
+    syncPanel();
+  }
+  $('linkOk').addEventListener('click', () => {
+    if (!pendingLink) return;
+    if ($('linkSkip').checked) { try { localStorage.setItem(LINK_SKIP, '1'); } catch { /* 저장 못 해도 이번에는 연다 */ } }
+    openLink(pendingLink);
+  });
+  $('linkCancel').addEventListener('click', () => {
+    pendingLink = null;
+    invoke('take_link').catch(() => {});
+    $('linkAsk').classList.remove('open');
+    syncPanel();
+  });
+  listen('open-link', (e) => { invoke('take_link').catch(() => {}); askLink(e.payload); });
+  invoke('take_link').then(askLink).catch(() => {});
 
   listen('tiles', (e) => render(e.payload));
   listen('toast', (e) => toast(String(e.payload)));

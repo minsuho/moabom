@@ -542,7 +542,7 @@ fn emit(app: &AppHandle) {
     }
 }
 
-fn toast(app: &AppHandle, msg: &str) {
+pub(crate) fn toast(app: &AppHandle, msg: &str) {
     let _ = app.emit_to(UI, "toast", msg);
 }
 
@@ -1931,6 +1931,36 @@ fn open_saved(app: &AppHandle, tiles: &[SavedTile]) -> usize {
         }
     }
     failed
+}
+
+/// 지통실 링크(link.rs)로 받은 방송들을 연다. replace면 열린 방송을 모두 닫고, 아니면 이미 열린 방송(같은 플랫폼·채널)은 건너뛴다.
+/// 안 열린 방송 수를 돌려준다.
+pub(crate) async fn open_inputs(app: &AppHandle, inputs: Vec<String>, replace: bool) -> Result<usize, String> {
+    let open: Vec<(u32, Platform, String)> = {
+        let state = app.state::<Tiles>();
+        let g = state.0.lock().unwrap();
+        g.tiles.iter().map(|t| (t.id, t.platform, t.channel.clone())).collect()
+    };
+    if replace {
+        for (id, _, _) in &open {
+            remove_tile(app, *id).await?;
+        }
+    }
+    let mut failed = 0;
+    for input in inputs {
+        if !replace {
+            if let Ok(r) = platforms::resolve(&input) {
+                if open.iter().any(|(_, p, c)| *p == r.platform && *c == r.channel) {
+                    continue;
+                }
+            }
+        }
+        if let Err(e) = open_tile(app, &input, None) {
+            eprintln!("[moabom] {input}: {e}");
+            failed += 1;
+        }
+    }
+    Ok(failed)
 }
 
 /// 시작할 때 저장해 둔 설정을 적용하고, 켜 두었으면 마지막으로 보던 방송을 다시 연다.
