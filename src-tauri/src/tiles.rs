@@ -1936,6 +1936,14 @@ fn open_saved(app: &AppHandle, tiles: &[SavedTile]) -> usize {
 /// 지통실 링크(link.rs)로 받은 방송들을 연다. replace면 열린 방송을 모두 닫고, 아니면 이미 열린 방송(같은 플랫폼·채널)은 건너뛴다.
 /// 안 열린 방송 수를 돌려준다.
 pub(crate) async fn open_inputs(app: &AppHandle, inputs: Vec<String>, replace: bool) -> Result<usize, String> {
+    // 링크로 켜졌으면 지난 방송 다시 열기(restore_session, 백그라운드)가 끝날 때까지 기다린다.
+    // 안 기다리면 아직 안 열린 방송을 '없다'고 보고 한 번 더 열어 겹친다. 10초까지만 기다린다.
+    for _ in 0..100 {
+        if !app.state::<Tiles>().0.lock().unwrap().restoring {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
     let open: Vec<(u32, Platform, String)> = {
         let state = app.state::<Tiles>();
         let g = state.0.lock().unwrap();
@@ -1947,13 +1955,17 @@ pub(crate) async fn open_inputs(app: &AppHandle, inputs: Vec<String>, replace: b
         }
     }
     let mut failed = 0;
+    // 같은 방송은 한 번만: 이미 열린 것(replace가 아니면)과 링크 안에서 겹친 것. 채널 아이디는 대소문자를 가리지 않는다
+    let same = |p: Platform, c: &str, q: Platform, d: &str| p == q && c.eq_ignore_ascii_case(d);
+    let mut seen: Vec<(Platform, String)> = Vec::new();
     for input in inputs {
-        if !replace {
-            if let Ok(r) = platforms::resolve(&input) {
-                if open.iter().any(|(_, p, c)| *p == r.platform && *c == r.channel) {
-                    continue;
-                }
+        if let Ok(r) = platforms::resolve(&input) {
+            let dup_open = !replace && open.iter().any(|(_, p, c)| same(*p, c, r.platform, &r.channel));
+            let dup_link = seen.iter().any(|(p, c)| same(*p, c, r.platform, &r.channel));
+            if dup_open || dup_link {
+                continue;
             }
+            seen.push((r.platform, r.channel.clone()));
         }
         if let Err(e) = open_tile(app, &input, None) {
             eprintln!("[moabom] {input}: {e}");
