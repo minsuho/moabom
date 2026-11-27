@@ -40,6 +40,7 @@
   .chatctl { display: flex; gap: 6px; align-items: center; }
   .chatctl.hidden, .chatctl .hidden { display: none; }
   .sel { height: 34px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel); color: var(--text); font: inherit; outline: none; }
+  #reconnect { width: 120px; flex: none; }
   #chatSel { height: 34px; max-width: 240px; padding: 0 8px; border-radius: 8px; border: 1px solid var(--accent);
     background: var(--panel); color: var(--text); font: inherit; outline: none; }
 
@@ -176,6 +177,7 @@
     <option value="low">저화질</option>
   </select>
   <div class="spacer"></div>
+  <select id="reconnect" class="sel" aria-label="방송 다시 연결" title="다시 연결할 방송 고르기" hidden></select>
   <span class="count" id="count"></span>
   <div class="chatctl" id="chatctl">
     <button class="btn" id="chatOpen" title="선택한 방송 채팅 열기 (C)"><svg class="ic"><use href="#i-chat"/></svg>채팅</button>
@@ -324,6 +326,12 @@
     $('empty').classList.toggle('hidden', s.tiles.length > 0);
     // 메인 창에 방송이 하나도 없고 다른 창에만 있을 때 안내를 띄운다(방송이 아예 없으면 첫 화면).
     const windows = s.windows || [];
+    const reconnect = $('reconnect');
+    reconnect.hidden = s.tiles.length === 0;
+    reconnect.replaceChildren(
+      new Option('방송 다시 연결', ''),
+      ...s.tiles.map((t, i) => new Option(`${i + 1}. ${t.name || t.channel} · ${PF[t.platform]}${t.window ? ` (${t.window}번 창)` : ''}`, String(t.id))),
+    );
     const inMain = s.tiles.filter((t) => !t.window).length;
     const away = s.tiles.length > 0 && inMain === 0;
     $('away').classList.toggle('hidden', !away);
@@ -336,6 +344,12 @@
     gb.querySelector('use').setAttribute('href', away ? '#i-popin' : '#i-popout');
     renderChat(s);
   }
+
+  $('reconnect').addEventListener('change', (e) => {
+    const menu = e.currentTarget;
+    if (menu.value) call('command', { cmd: 'reload', arg: Number(menu.value) });
+    menu.value = '';
+  });
 
   // ---------- 채팅 드롭다운 ----------
   // 오른쪽 채팅 영역에는 한 번에 하나만 보이고, 여기서 어느 방송 채팅을 볼지 고른다.

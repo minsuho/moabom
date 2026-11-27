@@ -92,6 +92,8 @@ fn main() {
             });
             tiles::relayout(app.handle());
             tiles::watch_live(app.handle());
+            #[cfg(windows)]
+            tiles::watch_playback(app.handle());
             notify::register(app.handle());
             // 지통실 링크(moabom://): 이 실행 파일로 연결하고, 링크로 켜졌으면 컨트롤 바에 넘긴다
             link::register();

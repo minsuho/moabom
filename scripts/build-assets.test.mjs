@@ -83,10 +83,18 @@ test('UI keeps IPC, settings, group actions, keyboard commands and snapshots', a
     d.getElementById('q').blur();
     w.dispatchEvent(new w.KeyboardEvent('keydown', { code: 'KeyM', bubbles: true }));
     for (const fn of Object.values(events)) fn({ payload: snapshot });
+    events.tiles({ payload: { ...snapshot, selected: 1, tiles: [
+      { id: 1, name: '첫 방송', platform: 'chzzk', window: 0 },
+      { id: 2, name: '멈춘 방송', platform: 'soop', window: 1 },
+    ] } });
+    const reconnect = d.getElementById('reconnect');
+    reconnect.value = '2';
+    reconnect.dispatchEvent(new w.Event('change'));
     await flush();
     assert.ok(calls.some(([cmd]) => cmd === 'add_tile'));
     assert.ok(calls.some(([cmd]) => cmd === 'set_quality'));
     assert.ok(calls.some(([cmd]) => cmd === 'save_group'));
+    assert.ok(calls.some(([cmd, args]) => cmd === 'command' && args.cmd === 'reload' && args.arg === 2));
     assert.equal(typeof w.__focusAdd, 'function');
     const result = JSON.parse(JSON.stringify({ calls, body: d.body.innerHTML.replace(/<script>[\s\S]*?<\/script>/, '') }));
     dom.window.close();
@@ -149,4 +157,32 @@ test('quality selection and retry path produce the same player calls', async () 
   assert.ok(actual.some(([level]) => level === 'medium'));
   assert.ok(actual.some(([level]) => level === 'auto'));
   assert.ok(actual.some(([level]) => level === 'hd1080'));
+});
+
+test('watchdog reports a stall even when the player replaces its video', async () => {
+  const js = await source('src-tauri/src/inject/watchdog.js');
+  for (const code of [js, await protect(js)]) {
+    const { dom, w, timers } = browser('<video></video>', 'https://play.sooplive.com/fixture');
+    try {
+      const messages = [];
+      w.chrome.webview.postMessage = (raw) => messages.push(JSON.parse(raw));
+      let now = 0;
+      w.performance.now = () => now;
+      w.Date.now = () => 100000 + now;
+      w.__mv = { videoOnly: true };
+      w.__mvLive = true;
+      let playCalls = 0;
+      w.HTMLMediaElement.prototype.play = () => { playCalls++; return Promise.resolve(); };
+      w.eval(code.replaceAll('__MV_TOKEN__', 'fixture-token'));
+      for (; now <= 34000; now += 2000) {
+        if (now % 6000 === 0) w.document.querySelector('video').replaceWith(w.document.createElement('video'));
+        for (const timer of timers) timer.fn();
+      }
+      assert.equal(playCalls, 1);
+      assert.equal(messages.filter(({ cmd }) => cmd === 'stream-stalled').length, 1);
+      assert.ok(messages.some(({ cmd, t }) => cmd === 'stream-alive' && t === 'fixture-token'));
+    } finally {
+      dom.window.close();
+    }
+  }
 });

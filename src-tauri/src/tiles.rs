@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use serde::Serialize;
 use tauri::{
@@ -73,9 +74,8 @@ pub struct Tile {
     popup_chat: bool,
     /// 이 방송만 따로 정한 화질. 없으면 전체 화질을 따른다.
     quality: Option<Quality>,
-    /// 페이지 로드가 한 번이라도 끝났는지(처음 이동이 걸려 멈추는 경우를 감지하는 데 쓴다)
     #[serde(skip)]
-    loaded: bool,
+    recovery: Recovery,
     /// 방송 중인지. 확인하지 못했으면 None
     live: Option<bool>,
     /// 방송인 프로필 사진(종료 화면에 쓴다)
@@ -91,6 +91,81 @@ pub struct Tile {
     volume: u8,
     /// 선택하지 않아도 소리를 같이 낸다.
     mix: bool,
+}
+
+const PAGE_TIMEOUT: Duration = Duration::from_secs(30);
+// 백그라운드 웹뷰의 JS 타이머는 브라우저가 최대 1분 단위로 늦출 수 있다.
+const SIGNAL_TIMEOUT: Duration = Duration::from_secs(90);
+const RETRY_WINDOW: Duration = Duration::from_secs(300);
+const MAX_AUTO_ATTEMPTS: usize = 3;
+
+#[derive(Clone)]
+struct Recovery {
+    page: Option<f64>,
+    last_signal: Instant,
+    waiting_for_page: bool,
+    running: bool,
+    attempts: Vec<Instant>,
+}
+
+#[derive(Clone, Copy)]
+enum Reconnect {
+    TimedOut,
+    Stalled(f64),
+    Manual,
+    BroadcastStarted,
+}
+
+impl Recovery {
+    fn new(now: Instant) -> Self {
+        Self { page: None, last_signal: now, waiting_for_page: true, running: false, attempts: Vec::new() }
+    }
+
+    /// 이동 직전의 페이지에서 늦게 도착한 신호는 새 페이지가 열렸다는 뜻이 아니다.
+    fn signal(&mut self, page: f64, now: Instant) -> bool {
+        if self.waiting_for_page && self.page == Some(page) {
+            return false;
+        }
+        let new_page = self.waiting_for_page || self.page != Some(page);
+        self.page = Some(page);
+        self.last_signal = now;
+        self.waiting_for_page = false;
+        new_page
+    }
+
+    fn timed_out(&self, now: Instant, offline: bool) -> bool {
+        let timeout = if self.waiting_for_page { PAGE_TIMEOUT } else { SIGNAL_TIMEOUT };
+        (self.page.is_none() || !offline) && now.duration_since(self.last_signal) >= timeout
+    }
+
+    /// 중복 복구를 차단하고, 짧은 시간에 재발하면 웹뷰까지 다시 만든다.
+    fn begin(&mut self, reason: Reconnect, now: Instant, offline: bool) -> Option<bool> {
+        if self.running {
+            return None;
+        }
+        if !offline {
+            self.attempts.retain(|&at| now.duration_since(at) < RETRY_WINDOW);
+        }
+        let rebuild = match reason {
+            Reconnect::Manual => {
+                self.attempts.clear();
+                true
+            }
+            Reconnect::BroadcastStarted => {
+                self.attempts.clear();
+                false
+            }
+            Reconnect::TimedOut if !self.timed_out(now, offline) => return None,
+            Reconnect::Stalled(page) if offline || self.waiting_for_page || self.page != Some(page) => return None,
+            _ if self.attempts.len() >= MAX_AUTO_ATTEMPTS => return None,
+            _ => !self.attempts.is_empty(),
+        };
+        self.attempts.push(now);
+        self.waiting_for_page = true;
+        self.last_signal = now;
+        self.running = true;
+        Some(rebuild)
+    }
 }
 
 /// 화질 모드. 플랫폼별 적용은 inject/quality.js가 맡는다.
@@ -301,7 +376,7 @@ impl Inner {
         scripts.push(main_frame(&OVERLAY_JS.replace("__MV_TOKEN__", token())));
         scripts.push(main_frame(ASSIST_JS));
         scripts.push(main_frame(&QUALITY_JS.replace("__MV_QUALITY__", quality.as_str())));
-        scripts.push(main_frame(WATCHDOG_JS));
+        scripts.push(main_frame(&WATCHDOG_JS.replace("__MV_TOKEN__", token())));
         scripts
     }
 
@@ -576,6 +651,7 @@ fn push_overlay(app: &AppHandle) {
                     "fullscreen": g.fullscreen.contains(&t.window),
                     "quality": g.quality_of(t).as_str(),
                     "offline": t.live == Some(false),
+                    "live": t.live,
                     "image": t.image,
                     "nick": t.nick,
                     "volume": t.volume,
@@ -590,7 +666,7 @@ fn push_overlay(app: &AppHandle) {
     };
     for (id, s) in updates {
         if let Some(wv) = app.get_webview(&tile_label(id)) {
-            let _ = wv.eval(format!("window.__mvOverlay && window.__mvOverlay.set({s})"));
+            let _ = wv.eval(format!("window.__mvLive = {}; window.__mvOverlay && window.__mvOverlay.set({s})", s["live"]));
         }
     }
 }
@@ -643,14 +719,36 @@ fn on_tile_message(app: &AppHandle, id: u32, text: &str) {
         return;
     }
     if cmd == "ready" {
-        if let Ok(t) = app.state::<Tiles>().0.lock().unwrap().get_mut(id) {
-            t.loaded = true;
-        }
         // 오버레이가 준비되기 전에 보낸 상태(방송 종료 등)를 놓쳤을 수 있어 다시 보낸다.
         push_overlay(app);
         return;
     }
-    let target = if msg["self"].as_bool() == Some(true) { Some(id) } else { None };
+    if cmd == "stream-alive" {
+        if let Some(page) = msg["arg"].as_f64() {
+            let new_page = app.state::<Tiles>().0.lock().unwrap().get_mut(id)
+                .is_ok_and(|t| t.recovery.signal(page, Instant::now()));
+            if new_page && let Some(wv) = app.get_webview(&tile_label(id)) {
+                restore_page_state(&wv);
+                let tile = app.state::<Tiles>().0.lock().unwrap().get(id).ok()
+                    .filter(|t| t.platform == Platform::Soop && t.chat_open).cloned();
+                if let Some(tile) = tile
+                    && app.get_webview(&chat_label(id)).is_none()
+                    && let Err(e) = open_chat(app, &tile)
+                {
+                    eprintln!("[moabom] 타일 {id}: 숲 채팅을 다시 열지 못했습니다: {e}");
+                }
+            }
+        }
+        return;
+    }
+    if cmd == "stream-stalled" {
+        if let Some(page) = msg["arg"].as_f64() {
+            let app = app.clone();
+            tauri::async_runtime::spawn_blocking(move || auto_reconnect(&app, id, Reconnect::Stalled(page)));
+        }
+        return;
+    }
+    let target = if cmd == "reload" || msg["self"].as_bool() == Some(true) { Some(id) } else { None };
     let app = app.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(e) = run_command(app.clone(), Some(id), target, cmd, arg).await {
@@ -1367,10 +1465,6 @@ pub fn save_now(app: &AppHandle) {
 // ---------- 타일 조작 ----------
 
 async fn remove_tile(app: &AppHandle, id: u32) -> Result<(), String> {
-    close_chat(app, id);
-    if let Some(wv) = app.get_webview(&tile_label(id)) {
-        let _ = wv.close();
-    }
     {
         let state = app.state::<Tiles>();
         let mut g = state.0.lock().unwrap();
@@ -1381,6 +1475,10 @@ async fn remove_tile(app: &AppHandle, id: u32) -> Result<(), String> {
             let next = idx.and_then(|i| g.tiles.get(i).or_else(|| g.tiles.last()));
             g.selected = next.map(|t| t.id);
         }
+    }
+    close_chat(app, id);
+    if let Some(wv) = app.get_webview(&tile_label(id)) {
+        let _ = wv.close();
     }
     refresh(app);
     Ok(())
@@ -1398,15 +1496,19 @@ fn toggle_detach(app: &AppHandle, id: u32) -> Result<(), String> {
 
 /// 채팅 웹뷰를 닫는다. 숲 채팅을 받을 때 쓴 숨긴 팝업 창도 함께 정리한다.
 fn close_chat(app: &AppHandle, id: u32) {
+    close_chat_webview(app, id);
+    if let Ok(t) = app.state::<Tiles>().0.lock().unwrap().get_mut(id) {
+        t.chat_open = false;
+        t.popup_chat = false;
+    }
+}
+
+fn close_chat_webview(app: &AppHandle, id: u32) {
     if let Some(wv) = app.get_webview(&chat_label(id)) {
         let _ = wv.close();
     }
     if let Some(win) = app.get_window(&chat_label(id)) {
         let _ = win.destroy();
-    }
-    if let Ok(t) = app.state::<Tiles>().0.lock().unwrap().get_mut(id) {
-        t.chat_open = false;
-        t.popup_chat = false;
     }
 }
 
@@ -1477,32 +1579,55 @@ fn toggle_video_only(app: &AppHandle, id: u32) -> Result<(), String> {
     Ok(())
 }
 
-/// 방송을 여러 개 한꺼번에 열면 가끔 첫 페이지 이동이 끝나지 않고 about:blank에 멈춰 있다.
-/// 그때는 페이지 스크립트(자동 복구 포함)도 돌지 않는다. 방송 페이지는 열리면 오버레이가 "ready"를 보내므로,
-/// 30초 안에 소식이 없으면 먼저 다시 이동시키고, 그래도 안 되면 웹뷰를 새로 만든다.
-fn watch_first_load(app: &AppHandle, id: u32) {
+/// 페이지가 열리지 않거나 렌더러가 멈춰 스크립트 신호가 끊겨도 앱에서 복구한다.
+#[cfg(windows)]
+pub fn watch_playback(app: &AppHandle) {
     let app = app.clone();
-    std::thread::spawn(move || {
-        for attempt in 0..2 {
-            std::thread::sleep(std::time::Duration::from_secs(30));
-            let url = {
-                let state = app.state::<Tiles>();
-                let g = state.0.lock().unwrap();
-                match g.get(id) {
-                    Ok(t) if !t.loaded => t.url.clone(),
-                    _ => return,
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(5));
+        let expired: Vec<_> = {
+            let state = app.state::<Tiles>();
+            let g = state.0.lock().unwrap();
+            let now = Instant::now();
+            g.tiles.iter().filter(|t| t.recovery.timed_out(now, t.live == Some(false)))
+                .map(|t| (t.id, t.window)).collect()
+        };
+        for (id, window) in expired {
+            if window_of(&app, window).is_some_and(|w| w.is_minimized().unwrap_or(false)) {
+                if let Ok(t) = app.state::<Tiles>().0.lock().unwrap().get_mut(id) {
+                    t.recovery.last_signal = Instant::now();
                 }
-            };
-            eprintln!("[moabom] 타일 {id}: 30초 안에 열리지 않음, 복구 시도 {}", attempt + 1);
-            if attempt == 0 {
-                if let (Some(wv), Ok(url)) = (app.get_webview(&tile_label(id)), url.parse()) {
-                    let _ = wv.navigate(url);
-                }
-            } else if let Err(e) = recreate_tile(&app, id) {
-                toast(&app, &format!("방송을 다시 여는 데 실패했습니다: {e}"));
+                continue;
             }
+            auto_reconnect(&app, id, Reconnect::TimedOut);
         }
     });
+}
+
+fn auto_reconnect(app: &AppHandle, id: u32, reason: Reconnect) {
+    if let Err(e) = reconnect_tile(app, id, reason) {
+        eprintln!("[moabom] 타일 {id}: 방송 자동 복구 실패: {e}");
+    }
+}
+
+fn reconnect_tile(app: &AppHandle, id: u32, reason: Reconnect) -> Result<(), String> {
+    let (url, rebuild) = {
+        let state = app.state::<Tiles>();
+        let mut g = state.0.lock().unwrap();
+        let Ok(t) = g.get_mut(id) else { return Ok(()) };
+        let offline = t.live == Some(false);
+        let Some(rebuild) = t.recovery.begin(reason, Instant::now(), offline) else { return Ok(()) };
+        (t.url.clone(), rebuild)
+    };
+    let result = if let Some(wv) = app.get_webview(&tile_label(id)).filter(|_| !rebuild) {
+        url.parse().map_err(err).and_then(|url| wv.navigate(url).map_err(err))
+    } else {
+        recreate_tile(app, id)
+    };
+    if let Ok(t) = app.state::<Tiles>().0.lock().unwrap().get_mut(id) {
+        t.recovery.running = false;
+    }
+    result
 }
 
 /// 타일 웹뷰를 닫고 같은 설정으로 새로 만든다.
@@ -1510,21 +1635,31 @@ fn recreate_tile(app: &AppHandle, id: u32) -> Result<(), String> {
     let (tile, scripts) = {
         let state = app.state::<Tiles>();
         let g = state.0.lock().unwrap();
-        let tile = g.get(id)?.clone();
+        let Ok(tile) = g.get(id).cloned() else { return Ok(()) };
         let scripts = g.tile_scripts(tile.platform, g.quality_of(&tile));
         (tile, scripts)
     };
-    if let Some(wv) = app.get_webview(&tile_label(id)) {
-        let _ = wv.close();
-    }
-    // 같은 이름의 웹뷰가 정리될 시간을 준다.
-    std::thread::sleep(std::time::Duration::from_millis(300));
     let host = host_window(app, &tile)?;
     let builder = build_webview(app, &tile_label(id), &tile.url, &tile.profile, &scripts)?;
+    if let Some(wv) = app.get_webview(&tile_label(id)) {
+        wv.close().map_err(err)?;
+    }
+    // 숲 채팅 팝업은 기존 플레이어를 참조하므로 새 페이지에서 다시 연다.
+    if tile.platform == Platform::Soop && tile.chat_open {
+        close_chat_webview(app, id);
+        if let Ok(t) = app.state::<Tiles>().0.lock().unwrap().get_mut(id) {
+            t.popup_chat = false;
+        }
+    }
     let wv = host
         .add_child(builder, LogicalPosition::new(0.0, BAR_H), LogicalSize::new(1.0, 1.0))
         .map_err(err)?;
+    let current = app.state::<Tiles>().0.lock().unwrap().get(id).cloned();
+    let Ok(current) = current else { return wv.close().map_err(err) };
     listen_messages(app, &wv, id);
+    if current.window != tile.window {
+        wv.reparent(&host_window(app, &current)?).map_err(err)?;
+    }
     refresh(app);
     Ok(())
 }
@@ -1604,10 +1739,7 @@ async fn check_live(app: &AppHandle, id: u32) {
     };
     if came_back {
         // 꺼져 있는 동안 페이지가 다른 곳으로 갔을 수 있어 새로고침이 아니라 방송 주소로 다시 이동한다.
-        let url = app.state::<Tiles>().0.lock().unwrap().get(id).ok().and_then(|t| t.url.parse().ok());
-        if let (Some(wv), Some(url)) = (app.get_webview(&tile_label(id)), url) {
-            let _ = wv.navigate(url);
-        }
+        auto_reconnect(app, id, Reconnect::BroadcastStarted);
     }
     if let Some(name) = notify {
         notify_live(app, &name);
@@ -1624,8 +1756,7 @@ fn notify_live(app: &AppHandle, name: &str) {
 }
 
 fn reload_tile(app: &AppHandle, id: u32) -> Result<(), String> {
-    let wv = app.get_webview(&tile_label(id)).ok_or("타일이 없습니다")?;
-    wv.eval("location.reload()").map_err(err)
+    reconnect_tile(app, id, Reconnect::Manual)
 }
 
 /// 이 방송 음량을 바꾼다(0~100). 소리를 낼지는 선택·같이 듣기가 정한다.
@@ -1879,7 +2010,7 @@ fn open_tile(app: &AppHandle, input: &str, saved: Option<&SavedTile>) -> Result<
             title: None,
             popup_chat: false,
             quality: saved.and_then(|s| s.quality),
-            loaded: false,
+            recovery: Recovery::new(Instant::now()),
             live: None,
             image: None,
             input: input.trim().to_string(),
@@ -1907,7 +2038,6 @@ fn open_tile(app: &AppHandle, input: &str, saved: Option<&SavedTile>) -> Result<
     match host.add_child(builder, LogicalPosition::new(0.0, BAR_H), LogicalSize::new(1.0, 1.0)) {
         Ok(wv) => {
             listen_messages(app, &wv, tile.id);
-            watch_first_load(app, tile.id);
             let app = app.clone();
             tauri::async_runtime::spawn(async move { check_live(&app, tile.id).await });
         }
@@ -2019,10 +2149,12 @@ pub fn restore_session(app: &AppHandle, reopen_tiles: bool) {
     });
 }
 
-/// 단축키나 컨트롤 바 버튼에서 오는 명령. 대상은 선택한 타일이다.
+/// 단축키나 컨트롤 바에서 오는 명령. 다시 연결 메뉴는 타일 ID를 넘긴다.
 #[tauri::command]
 pub async fn command(app: AppHandle, cmd: String, arg: Option<i64>) -> Result<(), String> {
-    run_command(app, None, None, cmd, arg.unwrap_or(0)).await
+    let arg = arg.unwrap_or(0);
+    let target = (cmd == "reload" && arg > 0).then(|| u32::try_from(arg).ok()).flatten();
+    run_command(app, None, target, cmd, arg).await
 }
 
 #[tauri::command]
@@ -2192,7 +2324,7 @@ mod tests {
             title: None,
             popup_chat: false,
             quality: None,
-            loaded: false,
+            recovery: Recovery::new(Instant::now()),
             live: None,
             image: None,
             input: String::new(),
@@ -2234,6 +2366,40 @@ mod tests {
         assert!(!overlay.source.contains("__MV_TOKEN__"));
         assert!(overlay.source.contains(token()));
         assert_eq!(token().len(), 32);
+    }
+
+    #[test]
+    fn stalled_tile_escalates_and_manually_reconnects_after_retry_limit() {
+        let start = Instant::now();
+        let mut recovery = Recovery::new(start);
+        assert!(recovery.signal(1.0, start));
+        let stall = start + Duration::from_secs(31);
+        assert_eq!(recovery.begin(Reconnect::Stalled(1.0), stall, false), Some(false));
+        assert_eq!(recovery.begin(Reconnect::Manual, stall, false), None);
+        recovery.running = false;
+        let timeout = stall + PAGE_TIMEOUT;
+        assert!(!recovery.signal(1.0, timeout));
+        assert_eq!(recovery.begin(Reconnect::TimedOut, timeout, false), Some(true));
+        recovery.running = false;
+        assert!(recovery.signal(2.0, timeout));
+        let unresponsive = timeout + SIGNAL_TIMEOUT;
+        assert_eq!(recovery.begin(Reconnect::TimedOut, unresponsive, true), None);
+        assert_eq!(recovery.begin(Reconnect::TimedOut, unresponsive, false), Some(true));
+        recovery.running = false;
+        assert_eq!(recovery.begin(Reconnect::TimedOut, unresponsive + PAGE_TIMEOUT, false), None);
+        assert_eq!(recovery.begin(Reconnect::Manual, unresponsive + PAGE_TIMEOUT, true), Some(true));
+    }
+
+    #[test]
+    fn offline_tile_retries_initial_load_until_the_attempt_limit() {
+        let start = Instant::now();
+        let mut recovery = Recovery::new(start);
+        for attempt in 1..=MAX_AUTO_ATTEMPTS {
+            let now = start + PAGE_TIMEOUT * attempt as u32;
+            assert_eq!(recovery.begin(Reconnect::TimedOut, now, true), Some(attempt > 1));
+            recovery.running = false;
+        }
+        assert_eq!(recovery.begin(Reconnect::TimedOut, start + RETRY_WINDOW * 2, true), None);
     }
 
     #[test]
